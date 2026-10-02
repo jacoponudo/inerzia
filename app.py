@@ -130,20 +130,16 @@ elif st.session_state.phase == 1:
 
     # Extract based on condition
     with_source = condition_info["with_source"]
-    rewritten = condition_info["rewritten"]
+    # NOTA: Usiamo sempre testo originale (text_normal), indipendentemente dalla condizione
 
-    # Determine which text column to use
-    if rewritten:
-        text_key = "text_rewritten"
-    else:
-        text_key = "text_normal"
+    # Usa sempre il testo originale
+    text_key = "text_normal"
+    article_text = current_article[text_key]
 
     # Determine if we show source
     if with_source:
-        article_text = current_article[text_key]
         source_display = f"**Source:** {current_article['source']}"
     else:
-        article_text = current_article[text_key]
         source_display = None
 
     # Display progress
