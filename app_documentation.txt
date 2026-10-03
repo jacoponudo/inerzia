@@ -1,0 +1,684 @@
+===============================================================================
+NEWS PERCEPTION STUDY - APP DOCUMENTATION
+===============================================================================
+
+File:          app.py (Streamlit)
+Version:       2026-10-03 (APP_VERSION in app.py)
+Companion:     decisioni_esperimento.md (log of the design decisions, in Italian)
+
+Contents
+  1.  Purpose
+  2.  Study design as implemented
+  3.  Participant flow
+  4.  Randomisation
+  5.  The feed page and the article card
+  6.  What participants see in each phase and condition
+  7.  Data recorded
+  8.  Saving and storage
+  9.  Balanced assignment to conditions
+  10. Prolific integration
+  11. Input file (articles CSV)
+  12. Configuration options
+  13. Deployment
+  14. Testing
+  15. Visual design
+  16. Technical architecture
+  17. Known limitations
+  18. Open items to confirm
+  19. Changes from the previous version
+
+
+-------------------------------------------------------------------------------
+1. PURPOSE
+-------------------------------------------------------------------------------
+
+The app runs an online experiment on how people choose and evaluate news.
+Participants browse short news feeds and are free to open, read and like
+articles. In a first phase every participant sees which outlet published each
+article (through a colour). In a second phase the source cue and/or the
+original wording are manipulated between subjects. The app records every
+interaction so the preference gap between outlets can be compared across the
+two phases.
+
+The whole interface is in English.
+
+
+-------------------------------------------------------------------------------
+2. STUDY DESIGN AS IMPLEMENTED
+-------------------------------------------------------------------------------
+
+Stimuli
+  - 32 news articles shared on Reddit before 2022.
+  - 4 topics (e.g. Covid, Politics, Climate, Economy).
+  - 4 outlets: 2 reliable and 2 unreliable.
+  - Each outlet contributes 2 articles per topic (4 topics x 4 outlets x 2 =
+    32 articles).
+  - Every article exists in two versions: the original text and a version
+    rewritten by an LLM.
+
+Phases
+  Phase 1 - baseline (16 articles, pages 1-4)
+    One page per topic. Each page shows 4 articles, one per outlet. The source
+    colour is always visible and the text is always the original.
+
+  Phase 2 - treatment (the remaining 16 articles, pages 5-8)
+    Same structure, with the other article of each outlet for each topic. The
+    participant's condition decides what is shown.
+
+  There is no break, transition screen or announcement between the phases:
+  page 5 follows page 4 exactly as page 2 follows page 1.
+
+Conditions (between subjects, Phase 2 only)
+
+                        | Source visible (colour) | Source hidden (no colour)
+    --------------------+-------------------------+--------------------------
+    Original text       | Condition 1             | Condition 2
+    LLM-rewritten text  | Condition 3             | Condition 4
+
+  Condition numbers and labels saved in the data:
+    1 = "source visible / original text"
+    2 = "source hidden / original text"
+    3 = "source visible / rewritten text"
+    4 = "source hidden / rewritten text"
+
+  Participants are never told their condition.
+
+
+-------------------------------------------------------------------------------
+3. PARTICIPANT FLOW
+-------------------------------------------------------------------------------
+
+Screen 1 - Instructions and consent
+  - Title, a short description of the task and the estimated duration.
+  - "How it works", with a small visual sample of each element:
+      * "... Read more" link: each article opens with a headline and a
+        short preview; Read more keeps reading; after that, Read full article
+        shows the whole text.
+      * The four colour markers: the coloured marker in the top-left corner
+        shows which news outlet published the article; each colour is a
+        different outlet.
+      * Like button: click to like, click again to undo.
+      * Continue button: moves to the next feed; no going back.
+  - A neutral note that reading, liking and skipping are all equally useful.
+    This replaces the old in-feed message ("Liberta di scelta..."). Nothing
+    like it appears while participants read.
+  - A participation/consent box (voluntary participation, what is recorded,
+    contact and ethics placeholders).
+  - A consent checkbox. The "Start the study" button stays disabled until it
+    is ticked.
+
+  The session ID and the condition are NOT shown to the participant.
+
+Screens 2-9 - Feed pages (8 pages)
+  - Progress indicator: "Page n of 8" with a thin progress bar.
+  - Four article cards in random order.
+  - A "Continue" button (the last page says "Finish"), always enabled:
+    participants can move on without interacting with anything.
+
+Screen 10 - End
+  - "Thank you" and confirmation that responses were saved.
+  - The Prolific completion code (if configured) and a "Return to Prolific"
+    button.
+  - If the upload to Google Sheets fails after three attempts, a short message
+    and a "Try again" button appear. The completion code is still shown.
+
+
+-------------------------------------------------------------------------------
+4. RANDOMISATION
+-------------------------------------------------------------------------------
+
+Everything below is drawn independently for each participant when they click
+"Start the study", using Python's SystemRandom. Every draw is saved in the
+"sessions" sheet so the exact stimulus sequence can be reconstructed.
+
+  a. Condition (1-4): balanced assignment, see section 9.
+  b. Colour mapping: the 4 palette colours are shuffled and assigned to the
+     4 outlets. The mapping stays the same for the whole session (Phase 1
+     and Phase 2). Saved as color_map.
+  c. Phase split: for each topic x outlet, one of the 2 articles is drawn for
+     Phase 1 and the other goes to Phase 2. Saved as article_split.
+  d. Topic order in Phase 1: random permutation of the 4 topics.
+  e. Topic order in Phase 2: a second random permutation, independent of d.
+     Saved as phase1_topic_order and phase2_topic_order.
+  f. Article order within each page: random permutation of the 4 articles
+     (one per outlet), drawn separately for each of the 8 pages. Saved per
+     article as "position" (1 = top of the feed).
+
+
+-------------------------------------------------------------------------------
+5. THE FEED PAGE AND THE ARTICLE CARD
+-------------------------------------------------------------------------------
+
+Card anatomy (top to bottom)
+  - Colour marker: a small bookmark-shaped ribbon in the outlet's colour,
+    attached to the top-left edge of the card. It carries the outlet colour
+    only: no outlet name or domain is shown anywhere.
+    When the source is hidden the marker is removed entirely (no grey
+    placeholder).
+  - Headline.
+  - Text, revealed in three stages (see below).
+  - Like button.
+
+Text stages ("read more" pattern, after the WebMarcello tutorial)
+  The reveal follows the inline "...read more" pattern of the referenced
+  tutorial: the link sits inline right after the last visible word.
+
+  Stage 0 - preview:   the first 2 sentences, then the inline link
+                       "... Read more".
+  Stage 1 - read more: the text grows to 5 sentences in total (the 2 already
+                       shown + 3 new ones), then the inline link
+                       "... Read full article".
+                       "Read full article" only exists after "Read more"
+                       has been clicked.
+  Stage 2 - full:      the whole article.
+
+  - There is no "Read less": once opened, a text stays open.
+  - Newly revealed sentences fade in briefly so readers see what was added.
+  - Paragraph breaks of the source text are preserved: any line break in the
+    CSV text starts a new paragraph.
+  - Edge cases: if an article has 2 sentences or fewer, no link is shown
+    (readmore_available = FALSE). If it has 3-5 sentences, "Read more"
+    shows everything and "Read full article" never appears
+    (full_available = FALSE). Both flags are saved so these cases can be
+    excluded or handled in the analysis.
+  - The sentence counts are set by SNIPPET_SENTENCES (2) and
+    READMORE_SENTENCES (5) in app.py.
+
+Sentence splitting
+  Text is split into sentences after ".", "!", "?" or "..." (optionally
+  followed by a closing quote or bracket) when the next word starts with a
+  capital letter or a digit. Common abbreviations (Mr., Dr., U.S., U.K.,
+  e.g., Jan., etc.) and single initials ("J. K. Rowling") are protected so
+  they do not end a sentence. See section 17 for the limits of this rule.
+
+Like
+  - A single thumbs-up button that toggles on and off. It is optional.
+  - Only its state when the participant leaves the page counts
+    (liked_final). Every toggle is also logged with a timestamp
+    (like_history).
+
+Navigation
+  - "Continue" saves the page's interactions in memory and loads the next
+    page, scrolled to the top.
+  - There is no "Back" button: each page's data are final when the
+    participant clicks Continue.
+  - While the study is in progress the browser asks for confirmation if the
+    participant tries to close or reload the tab (WARN_ON_LEAVE). The guard
+    is removed when "Finish" is clicked.
+
+
+-------------------------------------------------------------------------------
+6. WHAT PARTICIPANTS SEE IN EACH PHASE AND CONDITION
+-------------------------------------------------------------------------------
+
+                   Pages 1-4 (Phase 1)       Pages 5-8 (Phase 2)
+    Condition 1    colour + original text    colour + original text
+    Condition 2    colour + original text    no colour + original text
+    Condition 3    colour + original text    colour + rewritten text
+    Condition 4    colour + original text    no colour + rewritten text
+
+Headlines in the rewritten conditions: if the CSV has a rewritten-headline
+column (title_rewritten), it is used. Otherwise the original headline is
+shown and only the body text is rewritten (see section 18).
+
+
+-------------------------------------------------------------------------------
+7. DATA RECORDED
+-------------------------------------------------------------------------------
+
+Three worksheets are used in the Google Sheet. They are created
+automatically, with their header row, on first use.
+
+7.1 Sheet "responses" - one row per article per participant (32 rows each)
+
+  session_id              Unique session ID (UTC timestamp + 6 random chars).
+  prolific_pid            Prolific participant ID from the URL (empty if none).
+  condition               1-4.
+  condition_label         Text label of the condition.
+  phase                   1 or 2.
+  page_number             1-8, in the order seen.
+  page_in_phase           1-4.
+  topic                   Topic of the page.
+  position                Position of the card in the feed (1 = top).
+  article_uid             Article ID ("id" column of the CSV if present,
+                          otherwise "a" + row number, e.g. a07).
+  outlet                  Outlet/domain of the article.
+  reliability_class       reliable / unreliable (see section 11).
+  outlet_color            Colour assigned to the outlet for this participant
+                          (saved even when the colour was hidden).
+  source_visible          TRUE if the colour marker was shown.
+  text_version            original / rewritten.
+  title_shown             Headline actually displayed.
+  n_sentences             Number of sentences in the displayed text.
+  readmore_available      FALSE if the text was too short to need it.
+  readmore_clicked        TRUE if "Read more" was clicked.
+  readmore_ms             Milliseconds from page load to the click.
+  readmore_ts             Click time, ISO 8601 UTC (participant's clock).
+  full_available          FALSE if "Read more" already showed everything.
+  full_clicked            TRUE if "Read full article" was clicked.
+  full_ms                 Milliseconds from page load to the click.
+  full_ts                 Click time, ISO 8601 UTC.
+  liked_final             Like state when the participant left the page.
+  like_toggles            Number of Like clicks.
+  like_history            JSON list of every toggle:
+                          [{"liked": true, "ms": 5120, "ts": "..."}, ...]
+  page_enter_ts           Time the page appeared (participant's clock).
+  page_exit_ts            Time "Continue" was clicked.
+  page_duration_ms        Time on the page, measured in the browser.
+  page_duration_server_s  Time on the page measured by the server (backup).
+  year, month, rating     Copied from the CSV, for convenience.
+
+  Notes
+  - Time on page is recorded per page, not per article. With four articles
+    on one screen, per-article reading time cannot be separated reliably;
+    the click timestamps give the order and timing of expansions.
+  - "Interactions" for the preference gap can be computed from
+    readmore_clicked, full_clicked and liked_final, by outlet and phase.
+
+7.2 Sheet "sessions" - one row per participant who completed the study
+
+  session_id, prolific_pid, study_id, prolific_session_id
+  condition, condition_label
+  assignment_method       balanced | random_no_storage | random_storage_error
+                          | forced_dev
+  color_map               JSON {outlet: colour}
+  phase1_topic_order      JSON list of topics in the order shown
+  phase2_topic_order      JSON list
+  article_split           JSON {"1": {topic: [ids]}, "2": {topic: [ids]}}
+  opened_at_utc           First load of the app.
+  consent_at_utc          Click on "Start the study".
+  started_at_utc          Same moment (randomisation done).
+  completed_at_utc        Click on "Finish".
+  duration_min            Minutes from start to the end screen.
+  n_articles, n_readmore, n_full, n_likes   Totals for quick checks.
+  user_agent              Browser/device string.
+  app_version             Version of app.py that produced the data.
+
+7.3 Sheet "assignments" - one row per participant who clicked Start
+
+  session_id, prolific_pid, condition, assigned_at_utc
+
+  This row contains no responses. It only reserves a place in a condition
+  so that participants starting at the same time are spread across
+  conditions (section 9). Comparing it with "sessions" gives the drop-out
+  rate per condition.
+
+7.4 Local backup
+  At the end, the app also writes data/responses/<session_id>_responses.csv
+  and <session_id>_session.json next to app.py. On Streamlit Community Cloud
+  the local disk is wiped at every restart, so this is only a safety net:
+  Google Sheets is the real data store.
+
+
+-------------------------------------------------------------------------------
+8. SAVING AND STORAGE
+-------------------------------------------------------------------------------
+
+  - All interaction data are kept in the participant's session and written
+    once, when the end screen opens (responses first, then the session
+    row).
+  - If a participant leaves before finishing, none of their responses are
+    saved (as stated in the consent text). Only their "assignments" row
+    exists.
+  - The upload is retried up to 3 times with increasing waits. Each part is
+    written only once, so a retry never duplicates rows.
+  - If all attempts fail, the end screen shows "Try again"; the completion
+    code is still shown so the participant can be paid. The failure is
+    printed in the app logs.
+  - If Google Sheets is not configured (e.g. local testing), only the local
+    backup is written and conditions are drawn at random.
+
+
+-------------------------------------------------------------------------------
+9. BALANCED ASSIGNMENT TO CONDITIONS
+-------------------------------------------------------------------------------
+
+Goal: equal numbers of COMPLETED participants per condition (block
+randomisation counting completers only).
+
+When a participant clicks "Start the study":
+  1. The app counts, for each condition:
+       - participants who completed the study ("sessions" sheet), plus
+       - participants who started less than PENDING_WINDOW_MIN minutes ago
+         (default 60) and have not finished yet ("assignments" sheet).
+  2. The new participant is assigned to the condition with the lowest count.
+     Ties are broken at random.
+  3. A row is added to "assignments".
+
+Why step 1 includes recent starters: Prolific often sends many people at
+once. If only completers counted, everyone starting in the same minutes would
+get the same condition. Counting recent starters spreads a burst evenly.
+Once a reservation is older than the window and has no completed session, it
+stops counting, so drop-outs free their place. The result keeps completed
+counts within about one participant of each other (tested: 40 sequential
+completers -> 10/10/10/10; a burst of 12 simultaneous starts -> 3/3/3/3).
+
+Set PENDING_WINDOW_MIN comfortably above the typical completion time, but not
+much more, or drop-outs will hold places too long.
+
+If Google Sheets cannot be reached at that moment, the condition is drawn at
+random and assignment_method records it.
+
+
+-------------------------------------------------------------------------------
+10. PROLIFIC INTEGRATION
+-------------------------------------------------------------------------------
+
+  - The app reads PROLIFIC_PID, STUDY_ID and SESSION_ID from the URL.
+    In Prolific, choose "I'll use URL parameters" so the study URL becomes:
+      https://<your-app>.streamlit.app/?PROLIFIC_PID={{%PROLIFIC_PID%}}&STUDY_ID={{%STUDY_ID%}}&SESSION_ID={{%SESSION_ID%}}
+  - Completion: put the Prolific completion code in secrets.toml
+    ([prolific] completion_code). The end screen shows it and the
+    "Return to Prolific" button opens:
+      https://app.prolific.com/submissions/complete?cc=<code>
+    The button opens in a new tab, which works even though Streamlit Cloud
+    serves apps inside a frame.
+  - The app runs without a Prolific ID (useful for testing); prolific_pid is
+    then empty.
+
+
+-------------------------------------------------------------------------------
+11. INPUT FILE (ARTICLES CSV)
+-------------------------------------------------------------------------------
+
+Location:  data/articoli_selezionati - articoli scelti.csv (next to app.py)
+
+Columns (for each field the app uses the first name it finds; edit
+COLUMN_CANDIDATES in app.py if yours differ):
+
+  Field             Accepted column names                       Required
+  ----------------  ------------------------------------------  --------
+  id                id, article_id                              no
+  topic             topic                                       yes
+  outlet            domain, outlet, source                      yes
+  title             title, headline                             no*
+  title_rewritten   title_rewritten, rewritten_title,           no
+                    headline_rewritten
+  text              clean_text, text                            yes
+  text_rewritten    rewritten_text, text_rewritten,             yes
+                    clean_text_rewritten, llm_text, ai_text,
+                    rewritten
+  reliability       reliability_class, reliability_label        no
+  rating            rating                                      no
+  year, month       year, month                                 no
+
+  * Without a headline column, cards show the text only.
+
+Reliability class
+  - From the reliability column if present.
+  - Otherwise derived from "rating": the outlets are ranked by mean rating
+    and the top half are labelled "reliable", the bottom half "unreliable".
+  - Otherwise "NA".
+
+Validation (checked when the app loads)
+  - Required columns exist.
+  - Every topic x outlet combination has exactly 2 articles.
+  - No more outlets than palette colours (4).
+  - No empty original or rewritten text, no duplicate IDs.
+  If anything fails, the app shows "The study isn't set up correctly" with
+  the list of problems instead of the study. Check this before launching.
+  Editing the CSV reloads it automatically on the next page load.
+
+
+-------------------------------------------------------------------------------
+12. CONFIGURATION OPTIONS (top of app.py)
+-------------------------------------------------------------------------------
+
+  ARTICLES_CSV          Path of the articles file.
+  COLUMN_CANDIDATES     Accepted CSV column names (section 11).
+  ARTICLES_PER_CELL     Articles per outlet per topic (2).
+  SNIPPET_SENTENCES     Sentences in the preview (2).
+  READMORE_SENTENCES    Sentences after "Read more", in total (5).
+  OUTLET_PALETTE        The 4 outlet colours (Okabe-Ito: blue #0072B2,
+                        orange #E69F00, green #009E73, purple #CC79A7),
+                        chosen to stay distinguishable for colour-blind
+                        participants.
+  CONDITIONS            Condition definitions.
+  PENDING_WINDOW_MIN    Reservation window for balanced assignment (60).
+  WARN_ON_LEAVE         Ask before closing the tab mid-study (True).
+  DEV_MODE              If True, ?condition=1..4 in the URL forces a
+                        condition. Keep False for data collection.
+  ESTIMATED_MINUTES     Duration shown in the instructions ("15-20").
+  RESEARCHER_CONTACT    Contact line in the consent box (placeholder).
+  ETHICS_STATEMENT      Ethics line in the consent box (placeholder).
+
+
+-------------------------------------------------------------------------------
+13. DEPLOYMENT
+-------------------------------------------------------------------------------
+
+13.1 Project layout
+
+  your-repo/
+    app.py
+    requirements.txt
+    data/
+      articoli_selezionati - articoli scelti.csv
+    .streamlit/
+      config.toml
+      secrets.toml        (local only - never commit it)
+
+13.2 requirements.txt
+
+  streamlit>=1.40
+  pandas>=2.0
+  gspread>=6.0
+  google-auth>=2.0
+
+13.3 .streamlit/config.toml
+
+  [theme]
+  base = "light"
+
+  [browser]
+  gatherUsageStats = false
+
+  The light theme keeps Streamlit's own widgets (checkbox, buttons)
+  consistent with the design for participants whose system is in dark
+  mode.
+
+13.4 Google Sheets setup (once)
+
+  1. In Google Cloud Console, create a project and enable the Google Sheets
+     API and the Google Drive API.
+  2. Create a service account and download a JSON key for it.
+  3. Create an empty Google Sheet and share it with the service account's
+     e-mail address (…@….iam.gserviceaccount.com) as Editor.
+  4. Copy the spreadsheet key from its URL (the part between /d/ and /edit).
+  5. Fill in secrets.toml (below). The three worksheets are created
+     automatically.
+
+13.5 secrets.toml template
+
+  [sheets]
+  spreadsheet_key = "PASTE_THE_SPREADSHEET_KEY"
+
+  [prolific]
+  completion_code = "PASTE_THE_PROLIFIC_CODE"
+
+  [gcp_service_account]
+  type = "service_account"
+  project_id = "..."
+  private_key_id = "..."
+  private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+  client_email = "...@....iam.gserviceaccount.com"
+  client_id = "..."
+  auth_uri = "https://accounts.google.com/o/oauth2/auth"
+  token_uri = "https://oauth2.googleapis.com/token"
+  auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+  client_x509_cert_url = "..."
+
+  (Copy the values from the JSON key.)
+
+13.6 Streamlit Community Cloud
+
+  1. Push the project to a GitHub repository. A private repository is
+     recommended, since it contains the stimuli.
+  2. On share.streamlit.io, create an app from the repository with app.py
+     as the main file.
+  3. In the app's settings, paste the content of secrets.toml into
+     "Secrets".
+  4. Open the app once and complete it yourself to check that rows appear
+     in the Google Sheet. Then delete your test rows from all three sheets
+     before launching, so they don't affect the balancing.
+  5. Free Streamlit apps go to sleep after a period without visitors: open
+     the app just before publishing the Prolific study.
+
+13.7 Running locally
+
+  pip install -r requirements.txt
+  streamlit run app.py
+
+
+-------------------------------------------------------------------------------
+14. TESTING
+-------------------------------------------------------------------------------
+
+The app was tested end to end in a headless browser with a synthetic 32-row
+CSV (the real CSV had not been shared yet):
+  - Instructions -> consent -> 8 pages -> end screen, desktop (1280 px) and
+    mobile (390 px) widths.
+  - 32 different articles per participant, 16 per phase, 4 topics per
+    phase, one article per outlet on every page.
+  - Colour mapping identical across phases; different across participants.
+  - Condition 4 forced: markers present on pages 1-4, absent on pages 5-8,
+    rewritten text on pages 5-8.
+  - Read more / full article clicks, like toggles (on/off) and timings
+    recorded correctly in the saved file.
+  - Balanced assignment and the Google Sheets writing logic, with a
+    simulated spreadsheet (results in section 9).
+  - Prolific completion code and button on the end screen.
+Not tested: a real Google Sheet (needs your credentials) and the real CSV.
+
+How to test yourself
+  - Set DEV_MODE = True and open the app with ?condition=1 (2, 3, 4) to see
+    each condition. Set it back to False before launch.
+  - Add ?PROLIFIC_PID=TEST to the URL to check the ID is saved.
+
+
+-------------------------------------------------------------------------------
+15. VISUAL DESIGN
+-------------------------------------------------------------------------------
+
+Principle: colour is data. In this experiment the outlet colour is the
+manipulated cue, so it is the only colour on screen. All other elements -
+text, links, buttons, the active Like state, the progress bar - use neutral
+greys and near-black. That is why the "Read more" link is bold dark text
+with an underline instead of the tutorial's blue: a blue link could be
+confused with the blue outlet colour.
+
+  - Background: cool light grey (#ECEEF1). Cards: white with a thin grey
+    border, no shadows.
+  - Typefaces (Google Fonts): Schibsted Grotesk for headlines and interface
+    (a grotesque designed for a news publisher), Literata for article text
+    (a serif designed for long on-screen reading).
+  - The colour marker is a bookmark-shaped ribbon hanging from the top-left
+    edge of the card: the one strong visual element, easy to learn as a
+    label of the source.
+  - The only motion responds to participant actions: newly revealed
+    sentences fade in, the Like icon gives a small press feedback, and the
+    progress bar advances between pages. Motion is turned off for
+    participants who have "reduce motion" enabled.
+  - Single centred column (max 700 px), readable line lengths, works down
+    to phone width (the Continue button becomes full width). Visible
+    keyboard focus on all controls.
+  - Streamlit's own header, menu, footer and "running" indicator are
+    hidden, so the study looks like a standalone site.
+
+
+-------------------------------------------------------------------------------
+16. TECHNICAL ARCHITECTURE
+-------------------------------------------------------------------------------
+
+  - Streamlit handles the screens, the session state, randomisation,
+    storage and Prolific.
+  - Each feed page is a custom HTML/JavaScript component embedded in
+    Streamlit (FEED_COMPONENT_HTML in app.py; the file is written to a
+    temporary folder at start-up, so app.py stays a single file).
+  - All interactions on a page (read more, full article, like) happen in the
+    browser with no reload, so they are instant and timestamps are precise.
+    When "Continue" is clicked, the component sends one JSON object with
+    the page's interactions back to Python, which stores it and shows the
+    next page.
+  - Article text is inserted as plain text, never as HTML, so content in the
+    CSV cannot break or inject code into the page.
+
+
+-------------------------------------------------------------------------------
+17. KNOWN LIMITATIONS
+-------------------------------------------------------------------------------
+
+  - Reloading or closing the tab ends the session. Reopening the link starts
+    a new session with a new ID, new randomisation and possibly a new
+    condition; the abandoned attempt is not saved. The leave-confirmation
+    prompt reduces this. Repeated Prolific IDs in "assignments" reveal it.
+  - The sentence splitter is rule-based. An abbreviation at the end of a
+    sentence followed by a capitalised word ("...in the U.S. Officials
+    said") is not split. Sentences starting with a lowercase letter are
+    joined to the previous one. Check a few articles on screen once the
+    real CSV is loaded.
+  - Two participants clicking Start in the same second can occasionally get
+    the same condition; the imbalance corrects itself with later
+    participants.
+  - Google Sheets has per-minute request quotas. Each participant uses
+    about 3 requests at start and 2 at the end. For very large bursts,
+    publish in batches on Prolific. If the quota is hit at start, the
+    condition falls back to random (recorded in assignment_method); at the
+    end the upload is retried.
+  - Fonts load from Google Fonts. If blocked, system fonts are used and the
+    layout still works.
+  - Click times (readmore_ts, full_ts, page_*_ts) come from the
+    participant's computer clock; the *_ms durations do not depend on it.
+
+
+-------------------------------------------------------------------------------
+18. OPEN ITEMS TO CONFIRM
+-------------------------------------------------------------------------------
+
+  1. Real CSV: confirm the column names for headline, rewritten text and
+     reliability class, and whether a rewritten headline exists for the
+     rewritten conditions.
+  2. Consent text: replace RESEARCHER_CONTACT and ETHICS_STATEMENT, and
+     adapt the wording to the ethics committee's template.
+  3. Debriefing: Phase 2 may show AI-rewritten articles without telling
+     participants. Check whether the ethics committee requires a debriefing
+     screen at the end.
+  4. Final questionnaire (CMS, MIST, political ideology, TAIS): postponed.
+     It will be added between the last feed page and the end screen.
+  5. Estimated duration ("15-20 minutes"): adjust after a pilot.
+  6. Prolific completion code: add it to secrets.toml.
+  7. The "assignments" sheet is written when a participant starts (no
+     responses, only session ID and condition). This is needed for
+     balancing when many people start at once. All response data are still
+     written only at the end.
+
+
+-------------------------------------------------------------------------------
+19. CHANGES FROM THE PREVIOUS VERSION
+-------------------------------------------------------------------------------
+
+  - Single-article pages replaced by topic pages with a 4-article feed.
+  - Topics and articles now follow the design (8 pages; one article per
+    outlet per page; phase split, topic order and article order randomised
+    per participant).
+  - The treatment now applies to Phase 2 only; Phase 1 is the same for all.
+  - Unbalanced random.randint condition replaced by balanced assignment.
+  - Colours: fixed colour-blind-safe palette, randomly mapped to outlets per
+    participant, shown as a marker at the top-left of each card. Outlet
+    names are no longer shown.
+  - Expansion: progressive "Mostra altro" in steps of 3 sentences replaced
+    by the inline "... Read more" (5 sentences) and then
+    "... Read full article", which only appears after Read more.
+  - The reaction is no longer required: no "please leave a reaction"
+    message, no Skip button, Continue always available.
+  - The in-feed "Liberta di scelta" message was removed; instructions are
+    given once at the start.
+  - The topic name is not shown as a headline any more (the old code used
+    the topic as the headline).
+  - Condition name, session ID and file paths are no longer shown to
+    participants.
+  - Whole interface in English.
+  - Data saved to Google Sheets (plus local backup) with a much richer log:
+    positions, colours, timestamps, like history, time on page.
+  - Prolific ID capture and completion redirect.
+  - New visual design (section 15).
