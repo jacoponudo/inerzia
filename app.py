@@ -236,6 +236,14 @@ def _pick_column(df, field):
     return None
 
 
+def _is_number(value):
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def _clean(value):
     try:
         if pd.isna(value):
@@ -316,10 +324,18 @@ def load_study_data(csv_path, mtime):
                 errors.append(f"Topic '{t}' / outlet '{o}': found {n} articles, "
                               f"expected {ARTICLES_PER_CELL}.")
 
-    # Reliability class: from its own column if present, otherwise derived from
-    # the outlet rating (higher mean rating = reliable).
+    # Reliability class, in order of preference:
+    #   1. its own column (reliability_class / reliability_label);
+    #   2. the 'rating' column when it holds labels (e.g. "Reliable"/"Unreliable");
+    #   3. the 'rating' column when it holds numbers (higher outlet mean = reliable).
     if cols["reliability"] is None:
-        if cols["rating"] is not None:
+        rating_values = [a["rating"] for a in articles.values() if a["rating"] is not None]
+        numeric = bool(rating_values) and all(_is_number(v) for v in rating_values)
+        if rating_values and not numeric:
+            for a in articles.values():
+                a["reliability"] = str(a["rating"]).strip().lower() if a["rating"] is not None else "NA"
+            warnings.append("Reliability class taken from the labels in the 'rating' column.")
+        elif numeric:
             means = {}
             for o in outlets:
                 ratings = [float(a["rating"]) for a in articles.values()
@@ -329,11 +345,16 @@ def load_study_data(csv_path, mtime):
             reliable = set(ranked[: len(ranked) // 2])
             for a in articles.values():
                 a["reliability"] = "reliable" if a["outlet"] in reliable else "unreliable"
-            warnings.append("Reliability class derived from the 'rating' column.")
+            warnings.append("Reliability class derived from the numeric 'rating' column.")
         else:
             for a in articles.values():
                 a["reliability"] = "NA"
             warnings.append("No reliability information found.")
+
+    for o in outlets:
+        classes = {a["reliability"] for a in articles.values() if a["outlet"] == o}
+        if len(classes) > 1:
+            warnings.append(f"Outlet '{o}' has more than one reliability class: {sorted(classes)}.")
 
     for w in warnings:
         log(f"WARNING: {w}")
