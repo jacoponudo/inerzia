@@ -6,6 +6,7 @@ from datetime import datetime
 import random
 import string
 import time
+import hashlib
 
 # ============================================================================
 # PAGE CONFIG
@@ -23,7 +24,7 @@ st.set_page_config(
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 RESPONSES_DIR = os.path.join(DATA_DIR, "responses")
-ARTICLES_CSV = os.path.join(DATA_DIR, "articles.csv")
+ARTICLES_CSV = os.path.join(DATA_DIR, "articoli_selezionati - articoli scelti.csv")
 
 os.makedirs(RESPONSES_DIR, exist_ok=True)
 
@@ -36,13 +37,22 @@ def generate_session_id():
     return f"{timestamp}_{random_str}"
 
 # ============================================================================
+# GENERATE COLOR FOR SOURCE (consistent hash-based color)
+# ============================================================================
+def get_source_color(source):
+    """Generate a consistent color for each source based on its name"""
+    hash_obj = hashlib.md5(source.encode())
+    hash_hex = hash_obj.hexdigest()[:6]
+    return f"#{hash_hex}"
+
+# ============================================================================
 # LOAD ARTICLES
 # ============================================================================
 @st.cache_data(show_spinner=False)
 def load_articles():
     if not os.path.exists(ARTICLES_CSV):
-        st.error(f"❌ File articles.csv non trovato in {ARTICLES_CSV}")
-        st.info("Assicurati di avere il file articles.csv nella cartella ./data/")
+        st.error(f"❌ File articoli_selezionati - articoli scelti.csv non trovato in {ARTICLES_CSV}")
+        st.info("Assicurati di avere il file nella cartella ./data/")
         st.stop()
 
     df = pd.read_csv(ARTICLES_CSV)
@@ -64,7 +74,7 @@ if "session_initialized" not in st.session_state:
         "article_index": 0,
         "responses": [],
         "page_load_time": time.time(),
-        "expanded_paragraphs": False,
+        "expanded_snippet_count": 0,  # Traccia quante volte ho cliccato "mostra altro"
         "expanded_full": False,
         "current_reaction": None,
         "final_reaction": None,
@@ -96,9 +106,10 @@ You are about to participate in a study about how people perceive and evaluate n
 
 **What will you do?**
 - Read 32 news articles
-- For each article, you can expand it progressively (headline → snippet → paragraphs → full text)
+- For each article, you can expand it progressively (testo completo clickabile)
 - Leave a reaction (👍) at the end of reading each article
 - Your feedback helps us understand how people evaluate news content
+- **You are completely free to ignore articles and scroll to the next one** ✓
 
 **Estimated time:** 20-30 minutes
 
@@ -113,7 +124,7 @@ By clicking "Start", you confirm that you have read this information and agree t
         st.rerun()
 
 # ============================================================================
-# PHASE 1 — ARTICLE READING LOOP (32 articles)
+# PHASE 1 — ARTICLE READING LOOP
 # ============================================================================
 elif st.session_state.phase == 1:
 
@@ -130,15 +141,15 @@ elif st.session_state.phase == 1:
 
     # Extract based on condition
     with_source = condition_info["with_source"]
-    # NOTA: Usiamo sempre testo originale (text_normal), indipendentemente dalla condizione
 
-    # Usa sempre il testo originale
-    text_key = "text_normal"
-    article_text = current_article[text_key]
+    # Use clean_text as the full article text
+    article_text = current_article['clean_text']
 
     # Determine if we show source
     if with_source:
-        source_display = f"**Source:** {current_article['source']}"
+        source = current_article['domain']
+        source_color = get_source_color(source)
+        source_display = f"<span style='display: inline-block; width: 12px; height: 12px; background-color: {source_color}; border-radius: 50%; margin-right: 8px; vertical-align: middle;'></span>**{source}**"
     else:
         source_display = None
 
@@ -148,7 +159,7 @@ elif st.session_state.phase == 1:
     st.markdown("---")
 
     # Display headline (always visible)
-    st.markdown(f"### {current_article['headline']}")
+    st.markdown(f"### {current_article['topic']}")
 
     # Display source if applicable
     if source_display:
@@ -157,34 +168,56 @@ elif st.session_state.phase == 1:
     st.markdown("---")
 
     # Display snippet (always visible)
-    st.markdown(f"**{current_article['snippet']}**")
-
-    # Expandable sections
-    col1, col2, col3 = st.columns([1, 1, 1])
-
-    with col1:
-        if st.button("📖 Mostra altro", key=f"expand_paragraphs_{article_index}"):
-            st.session_state.expanded_paragraphs = True
-            st.rerun()
-
-    with col2:
-        if st.button("📄 Vedi tutto", key=f"expand_full_{article_index}"):
-            st.session_state.expanded_full = True
-            st.rerun()
-
-    with col3:
-        st.markdown("")  # Spacing
+    st.markdown(f"*{current_article['clean_text'][:200]}...*")
 
     st.markdown("")
 
-    # Show expanded content
-    if st.session_state.expanded_paragraphs and not st.session_state.expanded_full:
-        st.markdown(f"**{current_article['paragraphs']}**")
+    # Split text into sentences for progressive expansion
+    import re
+    sentences = re.split(r'(?<=[.!?])\s+', article_text)
 
+    # Calculate how many sentences to show based on expansion count
+    base_sentences = 3
+    expanded_snippet_count = st.session_state.expanded_snippet_count
+    sentences_to_show = base_sentences + (expanded_snippet_count * 3)
+
+    # Show initial text + clickable "mostra altro"
+    text_so_far = ' '.join(sentences[:min(sentences_to_show, len(sentences))])
+
+    st.markdown(text_so_far)
+
+    # Show "mostra altro" link if there's more text
+    if sentences_to_show < len(sentences):
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col1:
+            if st.button("📖 Mostra altro", key=f"expand_more_{article_index}"):
+                st.session_state.expanded_snippet_count += 1
+                st.rerun()
+
+        with col2:
+            if st.button("📄 Vedi tutto", key=f"expand_full_{article_index}"):
+                st.session_state.expanded_full = True
+                st.rerun()
+    else:
+        # All sentences shown, only "Vedi tutto" available
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            if st.button("📄 Vedi tutto", key=f"expand_full_{article_index}"):
+                st.session_state.expanded_full = True
+                st.rerun()
+
+    # Show full text if expanded_full
     if st.session_state.expanded_full:
+        st.markdown("---")
+        st.markdown("**Full Article:**")
         st.markdown(article_text)
 
     st.markdown("---")
+
+    # Info message
+    st.info("💡 **Libertà di scelta:** Puoi completamente ignorare questo articolo e passare al successivo se preferisci!")
+
+    st.markdown("")
 
     # Reaction buttons (always available during interaction)
     st.markdown("**Your reaction:**")
@@ -203,23 +236,50 @@ elif st.session_state.phase == 1:
         if st.button("Continue to next article", key=f"continue_{article_index}", use_container_width=True):
             # Save response
             response = {
-                "article_id": current_article["article_id"],
+                "article_id": article_index,
                 "topic": current_article["topic"],
-                "source": current_article["source"],
-                "variant": current_article["variant"],
+                "domain": current_article["domain"],
+                "year": current_article["year"],
+                "month": current_article["month"],
+                "rating": current_article["rating"],
                 "reaction": st.session_state.final_reaction,
+                "expansion_clicks": st.session_state.expanded_snippet_count,
                 "timestamp": datetime.now().isoformat(),
             }
             st.session_state.responses.append(response)
 
             # Reset for next article
             st.session_state.article_index += 1
-            st.session_state.expanded_paragraphs = False
+            st.session_state.expanded_snippet_count = 0
             st.session_state.expanded_full = False
             st.session_state.final_reaction = None
             st.rerun()
     else:
         st.info("👉 Please leave a reaction (👍) before continuing.")
+
+    # Alternative: Skip button
+    st.markdown("")
+    if st.button("⏭️ Skip to next article (no reaction)", key=f"skip_{article_index}", use_container_width=False):
+        # Save response with no reaction (skip)
+        response = {
+            "article_id": article_index,
+            "topic": current_article["topic"],
+            "domain": current_article["domain"],
+            "year": current_article["year"],
+            "month": current_article["month"],
+            "rating": current_article["rating"],
+            "reaction": "skipped",
+            "expansion_clicks": st.session_state.expanded_snippet_count,
+            "timestamp": datetime.now().isoformat(),
+        }
+        st.session_state.responses.append(response)
+
+        # Reset for next article
+        st.session_state.article_index += 1
+        st.session_state.expanded_snippet_count = 0
+        st.session_state.expanded_full = False
+        st.session_state.final_reaction = None
+        st.rerun()
 
 # ============================================================================
 # PHASE 2 — COMPLETION & SAVE
