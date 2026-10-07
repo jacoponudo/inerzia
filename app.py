@@ -12,8 +12,16 @@ Streamlit app for the two-phase news-feed experiment.
 Each phase is ONE scrolling feed with all its articles (topics x outlets,
 e.g. 4 x 4 = 16), shown one under the other in an order randomised
 independently for each phase and each participant. Interaction per article:
-    preview (~50 characters) -> "... Read more" (~144 characters)
-    -> "... Read full article" (whole text), plus an optional Like toggle.
+    preview -> "... Read more" -> "... Read full article" (whole text),
+    plus an optional Like toggle.
+
+The "Continue" / "Finish" button of each feed unlocks only after
+MIN_FEED_SECONDS (default 2 minutes), with a countdown on the button.
+Between the two feeds a break screen invites the participant to rest and
+shows a short "loading the second part" wait before they can go on.
+
+Every card shows the headline from the `Title` column (the same headline in
+both text versions). The LLM-rewritten text comes from the `LLM_text` column.
 
 When the source is visible, the whole card (background + border) is coloured
 with the outlet's colour.
@@ -46,7 +54,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-07"
+APP_VERSION = "2026-10-07.2"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -63,17 +71,16 @@ COLUMN_CANDIDATES = {
     "id": ["id", "article_id"],
     "topic": ["topic"],
     "outlet": ["domain", "outlet", "source"],
-    "title": ["title", "headline"],
-    "title_rewritten": ["title_rewritten", "rewritten_title", "headline_rewritten"],
+    "title": ["Title", "title", "headline"],
     "text": ["clean_text", "text"],
-    "text_rewritten": ["rewritten_text", "text_rewritten", "clean_text_rewritten",
-                       "llm_text", "ai_text", "rewritten"],
+    "text_rewritten": ["LLM_text", "llm_text", "rewritten_text", "text_rewritten",
+                       "clean_text_rewritten", "ai_text", "rewritten"],
     "reliability": ["reliability_class", "reliability_label"],
     "rating": ["rating"],
     "year": ["year"],
     "month": ["month"],
 }
-REQUIRED_FIELDS = ("topic", "outlet", "text", "text_rewritten")
+REQUIRED_FIELDS = ("topic", "outlet", "title", "text", "text_rewritten")
 
 ARTICLES_PER_CELL = 2      # articles per outlet per topic (1 per phase)
 
@@ -81,6 +88,14 @@ ARTICLES_PER_CELL = 2      # articles per outlet per topic (1 per phase)
 # moved back to the nearest word boundary, so no word is ever split.
 PREVIEW_CHARS = 144         # visible before "Read more"
 READMORE_CHARS = 500       # visible after "Read more" (total)
+
+# Minimum time on each feed before "Continue" / "Finish" can be clicked.
+# Set to 0 to disable (e.g. while testing).
+MIN_FEED_SECONDS = 120
+
+# Break screen between the two feeds: how long the "loading the second part"
+# wait lasts before the participant can start feed 2.
+BREAK_LOADING_SECONDS = 10
 
 # Card tint strength when the source is visible: 0 = white, 1 = full colour.
 CARD_TINT = 0.16
@@ -193,6 +208,14 @@ def number_word(n):
     return words[n] if 0 <= n < len(words) else str(n)
 
 
+def duration_words(seconds):
+    """120 -> 'two minutes', 60 -> 'one minute', 90 -> '90 seconds'."""
+    if seconds % 60 == 0:
+        m = seconds // 60
+        return f"{number_word(m)} minute{'s' if m != 1 else ''}"
+    return f"{seconds} seconds"
+
+
 def tint_hex(hex_color, alpha):
     """Opaque mix of `hex_color` with white (same formula as in the feed)."""
     h = hex_color.lstrip("#")
@@ -298,9 +321,6 @@ def load_study_data(csv_path, mtime):
         return None, errors
 
     warnings = []
-    if cols["title"] is None:
-        warnings.append("No headline column found: cards will show the text only.")
-
     articles = {}
     for i, row in df.iterrows():
         def val(field):
@@ -310,14 +330,15 @@ def load_study_data(csv_path, mtime):
         text = str(val("text") or "").strip()
         text_rw = str(val("text_rewritten") or "").strip()
         title = str(val("title") or "").strip()
-        title_rw = str(val("title_rewritten") or "").strip()
 
         if uid in articles:
             errors.append(f"Duplicate article id: {uid}.")
+        if not title:
+            errors.append(f"Article {uid} has no title ('{cols['title']}' column).")
         if not text:
             errors.append(f"Article {uid} has no original text.")
         if not text_rw:
-            errors.append(f"Article {uid} has no rewritten text.")
+            errors.append(f"Article {uid} has no rewritten text ('{cols['text_rewritten']}' column).")
 
         articles[uid] = {
             "uid": uid,
@@ -325,7 +346,6 @@ def load_study_data(csv_path, mtime):
             "topic": str(val("topic")).strip(),
             "outlet": str(val("outlet")).strip(),
             "title": title,
-            "title_rewritten": title_rw,
             "sentences_original": split_sentences(text),
             "sentences_rewritten": split_sentences(text_rw),
             "reliability": str(val("reliability")).strip() if val("reliability") is not None else None,
@@ -587,7 +607,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   .actions { display: flex; justify-content: flex-end; margin-top: 26px; }
   .next { appearance: none; border: 0; height: 48px; padding: 0 30px; border-radius: 24px;
           background: var(--ink); color: #FFFFFF; font: 600 16px/1 var(--sans); cursor: pointer;
-          transition: opacity .15s; }
+          font-variant-numeric: tabular-nums; transition: opacity .15s; }
   .next:disabled { opacity: .55; cursor: default; }
 
   button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
@@ -616,6 +636,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   var state = null;
   var currentPage = null;
   var lastHeight = -1;
+  var countdown = null;
 
   // ---- Streamlit component protocol -------------------------------------
   function send(type, data) {
@@ -639,6 +660,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   }
   function ms() { return Math.round(performance.now() - state.t0); }
   function iso() { return new Date().toISOString(); }
+  function clock(s) { var m = Math.floor(s / 60), r = s % 60; return m + ":" + (r < 10 ? "0" : "") + r; }
 
   // Opaque mix of a hex colour with white (alpha 0 = white, 1 = full colour).
   function tint(hex, alpha) {
@@ -765,12 +787,33 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     return b;
   }
 
+  // ---- minimum time on the feed -------------------------------------------
+  // The Continue / Finish button stays disabled, with a countdown, until
+  // `minMs` have passed since the feed was shown. performance.now() keeps
+  // counting correctly even if the browser throttles timers in a background tab.
+  function startCountdown(button, label) {
+    if (countdown) { clearInterval(countdown); countdown = null; }
+    function tick() {
+      var left = state.minMs - ms();
+      if (left <= 0) {
+        if (countdown) { clearInterval(countdown); countdown = null; }
+        if (!state.submitted) { button.disabled = false; button.textContent = label; }
+        return;
+      }
+      button.disabled = true;
+      button.textContent = label + " in " + clock(Math.ceil(left / 1000));
+    }
+    tick();
+    if (state.minMs > 0) countdown = setInterval(tick, 250);
+  }
+
   // ---- page --------------------------------------------------------------
   function buildPage(args) {
     state = {
       t0: performance.now(), enterTs: iso(), submitted: false, isLast: !!args.is_last,
       previewChars: args.preview_chars || 50, readmoreChars: args.readmore_chars || 144,
-      tintAlpha: (typeof args.card_tint === "number") ? args.card_tint : 0.16, items: []
+      tintAlpha: (typeof args.card_tint === "number") ? args.card_tint : 0.16,
+      minMs: Math.max(0, (args.min_seconds || 0) * 1000), items: []
     };
     root.textContent = "";
 
@@ -821,11 +864,13 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     root.appendChild(feed);
 
     var actions = el("div", "actions");
-    var next = el("button", "next", args.is_last ? "Finish" : "Continue");
+    var label = args.is_last ? "Finish" : "Continue";
+    var next = el("button", "next", label);
     next.type = "button";
     next.addEventListener("click", function () { submit(next); });
     actions.appendChild(next);
     root.appendChild(actions);
+    startCountdown(next, label);
 
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
@@ -838,7 +883,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   }
 
   function submit(button) {
-    if (state.submitted) return;
+    if (state.submitted || ms() < state.minMs) return;
     state.submitted = true;
     button.disabled = true;
     button.textContent = "One moment…";
@@ -977,6 +1022,23 @@ li.nps-row::marker { content: none; }
 }
 .nps-plain { font-size: 16px; line-height: 1.55; color: var(--ink-2); margin: 0 0 40px; }
 
+/* ---------- break between the feeds ---------- */
+.nps-kicker {
+  font-size: 14px; font-weight: 600; color: var(--ink-3); letter-spacing: .02em;
+  margin: 0 0 14px; font-variant-numeric: tabular-nums;
+}
+.nps-break .nps-sub { margin-bottom: 30px; }
+.nps-loading {
+  display: flex; align-items: center; gap: 12px; min-height: 48px;
+  font-size: 15px; color: var(--ink-3);
+}
+.nps-spinner {
+  flex: none; width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--ink);
+  animation: nps-spin .8s linear infinite;
+}
+@keyframes nps-spin { to { transform: rotate(360deg); } }
+
 /* ---------- end ---------- */
 .nps-code {
   background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
@@ -1010,6 +1072,9 @@ li.nps-row::marker { content: none; }
   .nps-lead { font-size: 18px; }
   li.nps-row { grid-template-columns: 1fr; gap: 10px; }
   .nps-code { padding: 20px 18px 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nps-spinner { animation-duration: 2.4s; }
 }
 """.replace(
     "__THUMB_MASK__",
@@ -1053,6 +1118,7 @@ def init_session():
         "page_idx": 0,
         "processed": [],
         "page_server_start": {},
+        "break_ready": False,
         "responses": [],
         "save_status": None,
         "saved_parts": [],
@@ -1248,11 +1314,16 @@ def render_intro(data):
         f'<span style="background:{tint_hex(c, CARD_TINT)};border-color:{c}"></span>'
         for c in OUTLET_PALETTE[: len(data["outlets"])]
     )
+    if MIN_FEED_SECONDS > 0:
+        wait_note = (f" The button becomes active after {duration_words(MIN_FEED_SECONDS)} "
+                     f"on each feed.")
+    else:
+        wait_note = ""
     st.html(f"""
 <section class="nps-intro">
   <h1 class="nps-title">News Perception Study</h1>
   <p class="nps-lead">You'll browse {number_word(n_feeds)} news feeds with {number_word(n_per_feed)} articles each. Read them the way you'd read news online.</p>
-  <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes. Please finish in one sitting and don't refresh the page.</p>
+  <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes, with a short break between the two feeds. Please finish in one sitting and don't refresh the page.</p>
 
   <h2 class="nps-h2">How it works</h2>
   <ul class="nps-rows">
@@ -1270,7 +1341,7 @@ def render_intro(data):
     </li>
     <li class="nps-row">
       <div class="nps-token"><span class="tok-next">Continue</span></div>
-      <p>When you've finished a feed, click <b>Continue</b> at the bottom of the page. You can't go back to an earlier feed.</p>
+      <p>When you've finished a feed, click <b>Continue</b> at the bottom of the page.{wait_note} You can't go back to an earlier feed.</p>
     </li>
   </ul>
   <p class="nps-plain">There's no right or wrong way to do this.</p>
@@ -1291,11 +1362,10 @@ def render_feed(data):
     cards = []
     for uid in page["articles"]:
         art = data["articles"][uid]
-        title = art["title_rewritten"] if (rewritten and art["title_rewritten"]) else art["title"]
         cards.append({
             "uid": uid,
             "color": ss.color_map[art["outlet"]] if page["source_visible"] else None,
-            "title": title or "",
+            "title": art["title"],   # same headline (Title column) in both versions
             "sentences": art["sentences_rewritten"] if rewritten else art["sentences_original"],
         })
 
@@ -1307,6 +1377,7 @@ def render_feed(data):
         articles=cards,
         preview_chars=PREVIEW_CHARS,
         readmore_chars=READMORE_CHARS,
+        min_seconds=MIN_FEED_SECONDS,
         card_tint=CARD_TINT,
         warn_on_leave=WARN_ON_LEAVE,
         key=f"feed-{page_id}",
@@ -1320,6 +1391,39 @@ def render_feed(data):
         if ss.page_idx >= len(ss.pages):
             ss.stage = "end"
             ss.completed_at = utc_iso()
+        else:
+            ss.stage = "break"
+            ss.break_ready = False
+        st.rerun()
+
+
+def render_break():
+    """Pause between the two feeds: an invitation to rest, a short
+    'loading the second part' wait, then the button to start feed 2.
+    The break length can be computed from the data as
+    page_enter_ts (feed 2) - page_exit_ts (feed 1)."""
+    ss = st.session_state
+    done = ss.page_idx
+    total = len(ss.pages)
+    st.html(f"""
+<section class="nps-break">
+  <p class="nps-kicker">Feed {done} of {total} complete</p>
+  <h1 class="nps-title">Take a short break</h1>
+  <p class="nps-lead">You've finished the first part. Before you start the second one, take a moment for yourself: look away from the screen, stretch, take a breath.</p>
+  <p class="nps-sub">The second feed works the same way as the first. Please don't refresh or close this page.</p>
+</section>""")
+
+    slot = st.empty()
+    if not ss.break_ready:
+        slot.html('<div class="nps-loading" role="status">'
+                  '<span class="nps-spinner" aria-hidden="true"></span>'
+                  'Please wait, we are loading the second part…</div>')
+        time.sleep(BREAK_LOADING_SECONDS)
+        ss.break_ready = True
+        slot.empty()
+
+    if st.button("Start the second part", type="primary", key="break_button"):
+        ss.stage = "feed"
         st.rerun()
 
 
@@ -1382,6 +1486,8 @@ def main():
         render_intro(data)
     elif stage == "feed":
         render_feed(data)
+    elif stage == "break":
+        render_break()
     else:
         render_end()
 
