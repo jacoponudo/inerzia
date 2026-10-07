@@ -221,7 +221,7 @@ _ABBR_RE = re.compile(
     r"(?<![\w.])(" + "|".join(re.escape(a) for a in sorted(_ABBREVIATIONS, key=len, reverse=True)) + r")"
 )
 _INITIAL_RE = re.compile(r"\b([A-Z])\.(?=\s+[A-Z])")
-_SPLIT_RE = re.compile(r"([.!?…]+[\""'')\]]*)\s+(?=[\""'(\[]?[A-Z0-9À-Ý])")
+_SPLIT_RE = re.compile(r'''([.!?…]+["')\]]*)\s+(?=["'(\[]?[A-Z0-9À-Ý])''')
 _DOT = "․"   # placeholder for protected full stops
 _SEP = "⁣"   # placeholder for sentence boundaries
 
