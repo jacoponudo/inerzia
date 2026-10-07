@@ -4,15 +4,19 @@ News Perception Study
 
 Streamlit app for the two-phase news-feed experiment.
 
-    Phase 1 (pages 1-4): every participant sees the source colour and the
-                         original text.
-    Phase 2 (pages 5-8): the between-subject treatment (2 x 2):
-                         source visible / hidden  x  original / LLM-rewritten.
+    Phase 1 (feed 1): every participant sees the source colour and the
+                      original text.
+    Phase 2 (feed 2): the between-subject treatment (2 x 2):
+                      source visible / hidden  x  original / LLM-rewritten.
 
-Each page is one topic and shows one article from each of the 4 outlets, in
-random order. Interaction per article:
-    headline + 2-sentence snippet -> "... Read more" (5 sentences)
+Each phase is ONE scrolling feed with all its articles (topics x outlets,
+e.g. 4 x 4 = 16), shown one under the other in an order randomised
+independently for each phase and each participant. Interaction per article:
+    preview (~50 characters) -> "... Read more" (~144 characters)
     -> "... Read full article" (whole text), plus an optional Like toggle.
+
+When the source is visible, the whole card (background + border) is coloured
+with the outlet's colour.
 
 Run locally:     streamlit run app.py
 Documentation:   app_documentation.txt
@@ -42,7 +46,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-03"
+APP_VERSION = "2026-10-07"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -72,8 +76,14 @@ COLUMN_CANDIDATES = {
 REQUIRED_FIELDS = ("topic", "outlet", "text", "text_rewritten")
 
 ARTICLES_PER_CELL = 2      # articles per outlet per topic (1 per phase)
-SNIPPET_SENTENCES = 2      # sentences visible before "Read more"
-READMORE_SENTENCES = 5     # sentences visible after "Read more" (total)
+
+# Text visible at each stage, in characters (spaces included). The cut is
+# moved back to the nearest word boundary, so no word is ever split.
+PREVIEW_CHARS = 50         # visible before "Read more"
+READMORE_CHARS = 144       # visible after "Read more" (total)
+
+# Card tint strength when the source is visible: 0 = white, 1 = full colour.
+CARD_TINT = 0.16
 
 # Okabe-Ito colours, chosen to stay distinguishable with colour-vision
 # deficiencies. Shuffled and assigned to the outlets for each participant.
@@ -94,30 +104,30 @@ WARN_ON_LEAVE = True       # browser asks for confirmation before leaving mid-st
 DEV_MODE = False           # True: ?condition=1..4 in the URL forces a condition
 
 ESTIMATED_MINUTES = "15–20"
-RESEARCHER_CONTACT = "[Researcher name, institution, e-mail]"
-ETHICS_STATEMENT = "[Ethics approval reference]"
 PROLIFIC_RETURN_URL = "https://app.prolific.com/submissions/complete?cc={code}"
 
-SHEET_ASSIGNMENTS = "assignments"
-SHEET_SESSIONS = "sessions"
-SHEET_RESPONSES = "responses"
+# New tab names (v2): the columns changed with the single-feed design, so the
+# data go to fresh tabs instead of being mixed with the old pilot data.
+SHEET_ASSIGNMENTS = "assignments_v2"
+SHEET_SESSIONS = "sessions_v2"
+SHEET_RESPONSES = "responses_v2"
 
 ASSIGNMENT_HEADERS = ["session_id", "prolific_pid", "condition", "assigned_at_utc"]
 
 SESSION_HEADERS = [
     "session_id", "prolific_pid", "study_id", "prolific_session_id",
     "condition", "condition_label", "assignment_method",
-    "color_map", "phase1_topic_order", "phase2_topic_order", "article_split",
-    "opened_at_utc", "consent_at_utc", "started_at_utc", "completed_at_utc",
+    "color_map", "phase1_order", "phase2_order", "article_split",
+    "opened_at_utc", "started_at_utc", "completed_at_utc",
     "duration_min", "n_articles", "n_readmore", "n_full", "n_likes",
     "user_agent", "app_version",
 ]
 
 RESPONSE_HEADERS = [
     "session_id", "prolific_pid", "condition", "condition_label",
-    "phase", "page_number", "page_in_phase", "topic", "position",
+    "phase", "page_number", "topic", "position",
     "article_uid", "outlet", "reliability_class", "outlet_color",
-    "source_visible", "text_version", "title_shown", "n_sentences",
+    "source_visible", "text_version", "title_shown", "n_sentences", "n_chars",
     "readmore_available", "readmore_clicked", "readmore_ms", "readmore_ts",
     "full_available", "full_clicked", "full_ms", "full_ts",
     "liked_final", "like_toggles", "like_history",
@@ -178,8 +188,17 @@ def get_secret(section, key, default=None):
 
 def number_word(n):
     words = ["zero", "one", "two", "three", "four", "five", "six", "seven",
-             "eight", "nine", "ten", "eleven", "twelve"]
+             "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+             "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"]
     return words[n] if 0 <= n < len(words) else str(n)
+
+
+def tint_hex(hex_color, alpha):
+    """Opaque mix of `hex_color` with white (same formula as in the feed)."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    mix = lambda c: round(255 - (255 - c) * alpha)
+    return f"rgb({mix(r)}, {mix(g)}, {mix(b)})"
 
 
 def log(message):
@@ -223,6 +242,14 @@ def split_sentences(text):
             if chunk:
                 sentences.append({"t": chunk, "p": p_idx})
     return sentences
+
+
+def n_chars(sentences):
+    """Length of the text as displayed (sentences joined by one space or one
+    paragraph break). Matches the character count used by the feed."""
+    if not sentences:
+        return 0
+    return sum(len(s["t"]) for s in sentences) + len(sentences) - 1
 
 
 # =============================================================================
@@ -524,9 +551,8 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   .feed { display: flex; flex-direction: column; gap: 14px; }
   .card { position: relative; background: var(--surface); border: 1px solid var(--line);
           border-radius: 12px; padding: 22px 26px 18px; }
-  .card.has-source { padding-top: 46px; }
-  .ribbon { position: absolute; top: -1px; left: 25px; width: 18px; height: 28px;
-            clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%); }
+  /* Source visible: the card is tinted with the outlet colour (set inline). */
+  .card.sourced { border-width: 2px; padding: 21px 25px 17px; }
 
   .headline { font-family: var(--sans); font-weight: 600; font-size: 21px; line-height: 1.28;
               letter-spacing: -0.012em; margin: 0 0 10px; color: var(--ink); text-wrap: pretty; }
@@ -535,8 +561,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   .body p { margin: 0 0 .75em; }
   .body p:last-child { margin-bottom: 0; }
   .fresh { animation: fresh .6s ease-out both; }
-  @keyframes fresh { from { opacity: 0; background: rgba(25, 28, 32, .07); }
-                     to { opacity: 1; background: transparent; } }
+  @keyframes fresh { from { opacity: 0; } to { opacity: 1; } }
 
   .more { appearance: none; border: 0; background: none; padding: 0; margin: 0;
           font: 600 15px/1 var(--sans); color: var(--ink); cursor: pointer; white-space: nowrap;
@@ -567,8 +592,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   @media (max-width: 560px) {
     .card { padding: 18px 18px 16px; }
-    .card.has-source { padding-top: 42px; }
-    .ribbon { left: 17px; }
+    .card.sourced { padding: 17px 17px 15px; }
     .headline { font-size: 19px; }
     .body { font-size: 16.5px; }
     .next { width: 100%; }
@@ -613,6 +637,17 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   function ms() { return Math.round(performance.now() - state.t0); }
   function iso() { return new Date().toISOString(); }
 
+  // Opaque mix of a hex colour with white (alpha 0 = white, 1 = full colour).
+  function tint(hex, alpha) {
+    var h = String(hex).replace("#", "");
+    if (h.length === 3) h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
+    var n = parseInt(h, 16);
+    var rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(function (c) {
+      return Math.round(255 - (255 - c) * alpha);
+    });
+    return "rgb(" + rgb.join(", ") + ")";
+  }
+
   function scrollParentToTop() {
     try {
       var d = window.parent.document;
@@ -638,25 +673,54 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   }
 
   // ---- article text ------------------------------------------------------
-  function visibleCount(a) {
-    var n = a.sentences.length;
-    if (a.stage === 0) return Math.min(state.snippet, n);
-    if (a.stage === 1) return Math.min(state.readmore, n);
-    return n;
+  // The text is flattened to one string: sentences joined by a space,
+  // paragraphs by "\n". Limits are counted in characters on this string.
+  function flatten(sentences) {
+    var out = "", para = null;
+    for (var i = 0; i < sentences.length; i++) {
+      var s = sentences[i];
+      if (i > 0) out += (s.p !== para) ? "\n" : " ";
+      out += s.t;
+      para = s.p;
+    }
+    return out;
   }
 
-  // Renders the visible sentences grouped in paragraphs, with the inline
-  // "... Read more" / "... Read full article" link after the last one.
+  // Cut position for a limit of `limit` characters: moved back to the last
+  // word boundary, then trailing spaces and weak punctuation are dropped.
+  function cutAt(flat, limit) {
+    if (flat.length <= limit) return flat.length;
+    var i = limit;
+    while (i > 0 && !/\s/.test(flat.charAt(i))) i--;
+    if (i === 0) i = limit;
+    while (i > 0 && /[\s,;:\u2013\u2014\-]/.test(flat.charAt(i - 1))) i--;
+    return i;
+  }
+
+  function visibleChars(a) {
+    if (a.stage === 0) return cutAt(a.flat, state.previewChars);
+    if (a.stage === 1) return cutAt(a.flat, state.readmoreChars);
+    return a.flat.length;
+  }
+
+  // Renders the visible text grouped in paragraphs, with the inline
+  // "... Read more" / "... Read full article" link after it.
   function renderBody(a, prevVisible) {
     var body = a.bodyEl;
-    var vis = visibleCount(a);
+    var vis = visibleChars(a);
     body.textContent = "";
-    var p = null, para = null;
-    for (var i = 0; i < vis; i++) {
-      var s = a.sentences[i];
-      if (p === null || s.p !== para) { p = el("p"); body.appendChild(p); para = s.p; }
-      else { p.appendChild(document.createTextNode(" ")); }
-      p.appendChild(el("span", i >= prevVisible ? "fresh" : null, s.t));
+    var paras = a.flat.split("\n");
+    var offset = 0, p = null;
+    for (var k = 0; k < paras.length; k++) {
+      var start = offset, end = offset + paras[k].length;
+      offset = end + 1;
+      if (start >= vis) break;
+      p = el("p");
+      body.appendChild(p);
+      var stop = Math.min(end, vis);
+      var split = Math.max(start, Math.min(stop, prevVisible));
+      if (split > start) p.appendChild(document.createTextNode(a.flat.slice(start, split)));
+      if (stop > split) p.appendChild(el("span", "fresh", a.flat.slice(split, stop)));
     }
     var label = null, nextStage = null;
     if (a.stage === 0 && a.readmoreAvailable) { label = "Read more"; nextStage = 1; }
@@ -664,7 +728,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     if (!label) return null;
     if (!p) { p = el("p"); body.appendChild(p); }
     p.appendChild(document.createTextNode(" "));
-    var link = el("button", "more", "… " + label);
+    var link = el("button", "more", "… " + label);
     link.type = "button";
     link.addEventListener("click", function () { expand(a, nextStage, vis); });
     p.appendChild(link);
@@ -702,12 +766,13 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   function buildPage(args) {
     state = {
       t0: performance.now(), enterTs: iso(), submitted: false, isLast: !!args.is_last,
-      snippet: args.snippet_sentences || 2, readmore: args.readmore_sentences || 5, items: []
+      previewChars: args.preview_chars || 50, readmoreChars: args.readmore_chars || 144,
+      tintAlpha: (typeof args.card_tint === "number") ? args.card_tint : 0.16, items: []
     };
     root.textContent = "";
 
     var head = el("div", "progress");
-    head.appendChild(el("span", "progress-label", "Page " + args.page_number + " of " + args.total_pages));
+    head.appendChild(el("span", "progress-label", "Feed " + args.page_number + " of " + args.total_pages));
     var track = el("div", "track");
     track.setAttribute("role", "progressbar");
     track.setAttribute("aria-valuemin", "0");
@@ -721,20 +786,20 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
     var feed = el("div", "feed");
     (args.articles || []).forEach(function (art, i) {
+      var sentences = art.sentences || [];
       var a = {
-        uid: String(art.uid), position: i + 1, sentences: art.sentences || [], stage: 0,
-        readmore_ms: null, readmore_ts: null, full_ms: null, full_ts: null,
+        uid: String(art.uid), position: i + 1, sentences: sentences, flat: flatten(sentences),
+        stage: 0, readmore_ms: null, readmore_ts: null, full_ms: null, full_ts: null,
         liked: false, history: []
       };
-      a.readmoreAvailable = a.sentences.length > state.snippet;
-      a.fullAvailable = a.sentences.length > state.readmore;
+      a.readmoreAvailable = a.flat.length > state.previewChars;
+      a.fullAvailable = a.flat.length > state.readmoreChars;
 
-      var card = el("article", "card" + (art.color ? " has-source" : ""));
+      var card = el("article", "card");
       if (art.color) {
-        var ribbon = el("div", "ribbon");
-        ribbon.style.background = art.color;
-        ribbon.setAttribute("aria-hidden", "true");
-        card.appendChild(ribbon);
+        card.classList.add("sourced");
+        card.style.background = tint(art.color, state.tintAlpha);
+        card.style.borderColor = art.color;
       }
       if (art.title) card.appendChild(el("h2", "headline", art.title));
       a.bodyEl = el("div", "body");
@@ -777,7 +842,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
       page_duration_ms: ms(),
       articles: state.items.map(function (a) {
         return {
-          uid: a.uid, position: a.position, n_sentences: a.sentences.length,
+          uid: a.uid, position: a.position, n_sentences: a.sentences.length, n_chars: a.flat.length,
           readmore_available: a.readmoreAvailable, readmore_ms: a.readmore_ms, readmore_ts: a.readmore_ts,
           full_available: a.fullAvailable, full_ms: a.full_ms, full_ts: a.full_ts,
           liked: a.liked, like_history: a.history
@@ -880,10 +945,9 @@ li.nps-row::marker { content: none; }
 .nps-row p { margin: 0; font-size: 16px; line-height: 1.55; color: var(--ink-2); }
 .nps-row b { color: var(--ink); font-weight: 600; }
 .nps-token { display: flex; align-items: center; justify-content: flex-start; }
-.tok-ribbons { gap: 9px; }
-.tok-ribbons span {
-  display: block; width: 15px; height: 24px;
-  clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%);
+.tok-swatches { gap: 8px; }
+.tok-swatches span {
+  display: block; width: 26px; height: 20px; border-radius: 5px; border: 2px solid;
 }
 .tok-more {
   font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: underline;
@@ -905,12 +969,6 @@ li.nps-row::marker { content: none; }
   background: var(--ink); color: #FFFFFF; font-weight: 600; font-size: 14px;
 }
 .nps-plain { font-size: 16px; line-height: 1.55; color: var(--ink-2); margin: 0 0 40px; }
-.nps-consent {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-  padding: 24px 26px 20px; margin: 0 0 8px;
-}
-.nps-consent p { font-size: 15px; line-height: 1.6; color: var(--ink-2); margin: 0 0 12px; }
-.nps-consent .nps-contact { color: var(--ink-3); font-size: 14px; margin: 16px 0 0; }
 
 /* ---------- end ---------- */
 .nps-code {
@@ -928,7 +986,6 @@ li.nps-row::marker { content: none; }
 }
 
 /* ---------- Streamlit widgets ---------- */
-.stCheckbox p, .stCheckbox label { color: var(--ink) !important; font-size: 15px !important; }
 .stButton > button, .stLinkButton > a,
 [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-secondary"],
 [data-testid="stBaseLinkButton-primary"] {
@@ -945,7 +1002,7 @@ li.nps-row::marker { content: none; }
   .nps-title { font-size: 34px; }
   .nps-lead { font-size: 18px; }
   li.nps-row { grid-template-columns: 1fr; gap: 10px; }
-  .nps-consent, .nps-code { padding: 20px 18px 16px; }
+  .nps-code { padding: 20px 18px 16px; }
 }
 """.replace(
     "__THUMB_MASK__",
@@ -977,14 +1034,13 @@ def init_session():
         "user_agent": user_agent,
         "stage": "intro",
         "opened_at": utc_iso(),
-        "consent_at": None,
         "started_at": None,
         "started_ts": None,
         "completed_at": None,
         "condition": None,
         "assignment_method": None,
         "color_map": {},
-        "topic_order": {},
+        "article_order": {},
         "split": {},
         "pages": [],
         "page_idx": 0,
@@ -997,7 +1053,7 @@ def init_session():
 
 
 def start_study(data):
-    """Randomise everything for this participant and build the 8 pages."""
+    """Randomise everything for this participant and build the two feeds."""
     ss = st.session_state
     topics, outlets = list(data["topics"]), list(data["outlets"])
 
@@ -1014,33 +1070,33 @@ def start_study(data):
             split["1"][t].append(uids[0])
             split["2"][t].append(uids[1])
 
-    order = {"1": topics[:], "2": topics[:]}
-    _rng.shuffle(order["1"])
-    _rng.shuffle(order["2"])
+    # One feed per phase with all its articles; the order mixes topics and
+    # outlets and is drawn independently for the two phases.
+    order = {}
+    for phase in ("1", "2"):
+        uids = [u for t in topics for u in split[phase][t]]
+        _rng.shuffle(uids)
+        order[phase] = uids
 
     condition, method = assign_condition(ss.session_id, ss.prolific_pid)
     cond = CONDITIONS[condition]
 
-    pages, number = [], 0
-    for phase in ("1", "2"):
-        for k, topic in enumerate(order[phase], start=1):
-            number += 1
-            uids = list(split[phase][topic])
-            _rng.shuffle(uids)
-            if phase == "1":
-                visible, version = True, "original"
-            else:
-                visible = cond["source_visible"]
-                version = "rewritten" if cond["rewritten"] else "original"
-            pages.append({
-                "page_number": number, "phase": int(phase), "page_in_phase": k,
-                "topic": topic, "source_visible": visible, "text_version": version,
-                "articles": uids,
-            })
+    pages = []
+    for number, phase in enumerate(("1", "2"), start=1):
+        if phase == "1":
+            visible, version = True, "original"
+        else:
+            visible = cond["source_visible"]
+            version = "rewritten" if cond["rewritten"] else "original"
+        pages.append({
+            "page_number": number, "phase": int(phase),
+            "source_visible": visible, "text_version": version,
+            "articles": order[phase],
+        })
 
     ss.update({
         "condition": condition, "assignment_method": method, "color_map": color_map,
-        "split": split, "topic_order": order, "pages": pages, "page_idx": 0,
+        "split": split, "article_order": order, "pages": pages, "page_idx": 0,
         "stage": "feed", "started_at": utc_iso(), "started_ts": time.time(),
     })
     log(f"session {ss.session_id} started: condition {condition} ({method})")
@@ -1063,8 +1119,7 @@ def record_page(data, page, page_id, result, cards):
             "condition_label": CONDITIONS[ss.condition]["label"],
             "phase": page["phase"],
             "page_number": page["page_number"],
-            "page_in_phase": page["page_in_phase"],
-            "topic": page["topic"],
+            "topic": art["topic"],
             "position": item.get("position"),
             "article_uid": uid,
             "outlet": art["outlet"],
@@ -1074,6 +1129,7 @@ def record_page(data, page, page_id, result, cards):
             "text_version": page["text_version"],
             "title_shown": shown[uid]["title"],
             "n_sentences": len(shown[uid]["sentences"]),
+            "n_chars": item.get("n_chars", n_chars(shown[uid]["sentences"])),
             "readmore_available": bool(item.get("readmore_available")),
             "readmore_clicked": item.get("readmore_ms") is not None,
             "readmore_ms": item.get("readmore_ms"),
@@ -1108,11 +1164,10 @@ def build_session_row():
         "condition_label": CONDITIONS[ss.condition]["label"],
         "assignment_method": ss.assignment_method,
         "color_map": json.dumps(ss.color_map),
-        "phase1_topic_order": json.dumps(ss.topic_order.get("1", [])),
-        "phase2_topic_order": json.dumps(ss.topic_order.get("2", [])),
+        "phase1_order": json.dumps(ss.article_order.get("1", [])),
+        "phase2_order": json.dumps(ss.article_order.get("2", [])),
         "article_split": json.dumps(ss.split),
         "opened_at_utc": ss.opened_at,
-        "consent_at_utc": ss.consent_at,
         "started_at_utc": ss.started_at,
         "completed_at_utc": ss.completed_at,
         "duration_min": duration,
@@ -1180,26 +1235,27 @@ def render_setup_error(errors):
 
 
 def render_intro(data):
-    n_pages = 2 * len(data["topics"])
-    n_per_page = len(data["outlets"])
-    ribbons = "".join(f'<span style="background:{c}"></span>' for c in OUTLET_PALETTE[:n_per_page])
-    contact = html_lib.escape(RESEARCHER_CONTACT)
-    ethics = html_lib.escape(ETHICS_STATEMENT)
+    n_feeds = 2
+    n_per_feed = len(data["topics"]) * len(data["outlets"])
+    swatches = "".join(
+        f'<span style="background:{tint_hex(c, CARD_TINT)};border-color:{c}"></span>'
+        for c in OUTLET_PALETTE[: len(data["outlets"])]
+    )
     st.html(f"""
 <section class="nps-intro">
   <h1 class="nps-title">News Perception Study</h1>
-  <p class="nps-lead">You'll browse {number_word(n_pages)} short news feeds with {number_word(n_per_page)} articles each. Read them the way you'd read news online: open what interests you, like what you enjoy, and move on whenever you want.</p>
+  <p class="nps-lead">You'll browse {number_word(n_feeds)} news feeds with {number_word(n_per_feed)} articles each. Read them the way you'd read news online.</p>
   <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes. Please finish in one sitting and don't refresh the page.</p>
 
   <h2 class="nps-h2">How it works</h2>
   <ul class="nps-rows">
     <li class="nps-row">
       <div class="nps-token"><span class="tok-more">…&nbsp;Read more</span></div>
-      <p>Each article opens with a headline and a short preview. Click <b>Read more</b> to keep reading. After that, <b>Read full article</b> shows the whole text.</p>
+      <p>Each article opens with a short preview. Click <b>Read more</b> to keep reading. After that, <b>Read full article</b> shows the whole text.</p>
     </li>
     <li class="nps-row">
-      <div class="nps-token tok-ribbons">{ribbons}</div>
-      <p>The coloured marker in the top-left corner shows which news outlet published the article. Each colour is a different outlet.</p>
+      <div class="nps-token tok-swatches">{swatches}</div>
+      <p>The colour of each article's box shows which news outlet published it. Each colour is a different outlet.</p>
     </li>
     <li class="nps-row">
       <div class="nps-token"><span class="tok-like"><span class="tok-thumb" aria-hidden="true"></span><span>Like</span></span></div>
@@ -1207,22 +1263,13 @@ def render_intro(data):
     </li>
     <li class="nps-row">
       <div class="nps-token"><span class="tok-next">Continue</span></div>
-      <p>When you've finished a feed, click <b>Continue</b>. You can't go back to earlier feeds.</p>
+      <p>When you've finished a feed, click <b>Continue</b> at the bottom of the page. You can't go back to an earlier feed.</p>
     </li>
   </ul>
-  <p class="nps-plain">There's no right or wrong way to do this. Reading, liking and skipping are all equally useful to us.</p>
-
-  <div class="nps-consent">
-    <h2 class="nps-h2">Your participation</h2>
-    <p>Taking part is voluntary. You can stop at any time by closing this window; if you do, none of your responses will be stored.</p>
-    <p>We record how you interact with the articles (which ones you open and like, and how long you spend on each feed) together with your Prolific ID. The data are stored securely and used only for research.</p>
-    <p class="nps-contact">Contact: {contact}<br>{ethics}</p>
-  </div>
+  <p class="nps-plain">There's no right or wrong way to do this.</p>
 </section>""")
 
-    consent = st.checkbox("I have read this information and agree to take part.", key="consent_box")
-    if st.button("Start the study", type="primary", disabled=not consent, key="start_button"):
-        st.session_state.consent_at = utc_iso()
+    if st.button("Start the study", type="primary", key="start_button"):
         start_study(data)
         st.rerun()
 
@@ -1251,8 +1298,9 @@ def render_feed(data):
         total_pages=len(ss.pages),
         is_last=page["page_number"] == len(ss.pages),
         articles=cards,
-        snippet_sentences=SNIPPET_SENTENCES,
-        readmore_sentences=READMORE_SENTENCES,
+        preview_chars=PREVIEW_CHARS,
+        readmore_chars=READMORE_CHARS,
+        card_tint=CARD_TINT,
         warn_on_leave=WARN_ON_LEAVE,
         key=f"feed-{page_id}",
         default=None,
