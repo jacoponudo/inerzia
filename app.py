@@ -79,8 +79,8 @@ ARTICLES_PER_CELL = 2      # articles per outlet per topic (1 per phase)
 
 # Text visible at each stage, in characters (spaces included). The cut is
 # moved back to the nearest word boundary, so no word is ever split.
-PREVIEW_CHARS = 100         # visible before "Read more"
-READMORE_CHARS = 300       # visible after "Read more" (total)
+PREVIEW_CHARS = 144         # visible before "Read more"
+READMORE_CHARS = 500       # visible after "Read more" (total)
 
 # Card tint strength when the source is visible: 0 = white, 1 = full colour.
 CARD_TINT = 0.16
