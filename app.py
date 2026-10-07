@@ -10,15 +10,23 @@ Streamlit app for the two-phase news-feed experiment.
                       source visible / hidden  x  original / LLM-rewritten.
 
 Each phase is ONE scrolling feed with all its articles (topics x outlets,
-e.g. 4 x 4 = 16), shown one under the other in an order randomised
-independently for each phase and each participant. Interaction per article:
+e.g. 4 x 4 = 16), in an order randomised independently for each phase and
+each participant. So that the feed never seems to end, the same sequence is
+repeated REPEAT_ROUNDS times (default 10) one after the other.
+
+The state of an article is shared by all its copies: if the participant
+opens it ("Read more" / "Read full article") or likes it on one copy, every
+other copy of that article shows it opened / liked too.
+
+Interaction per article:
     preview -> "... Read more" -> "... Read full article" (whole text),
     plus an optional Like toggle.
 
-The "Continue" / "Finish" button of each feed unlocks only after
-MIN_FEED_SECONDS (default 2 minutes), with a countdown on the button.
-Between the two feeds a break screen invites the participant to rest and
-shows a short "loading the second part" wait before they can go on.
+The "Continue" / "Finish" button sits in a bar fixed at the bottom of the
+screen (always reachable, however far the participant scrolls). It unlocks
+only after MIN_FEED_SECONDS (default 2 minutes), with a countdown on it.
+Between the two feeds a short break screen shows a brief "loading the second
+part" wait (BREAK_LOADING_SECONDS) before the participant can go on.
 
 Every card shows the headline from the `Title` column (the same headline in
 both text versions). The LLM-rewritten text comes from the `LLM_text` column.
@@ -54,7 +62,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-07.2"
+APP_VERSION = "2026-10-07.3"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -89,13 +97,17 @@ ARTICLES_PER_CELL = 2      # articles per outlet per topic (1 per phase)
 PREVIEW_CHARS = 144         # visible before "Read more"
 READMORE_CHARS = 500       # visible after "Read more" (total)
 
+# How many times the article sequence of a feed is repeated, one after the
+# other, so that the feed never seems to end (16 articles x 10 = 160 cards).
+REPEAT_ROUNDS = 10
+
 # Minimum time on each feed before "Continue" / "Finish" can be clicked.
 # Set to 0 to disable (e.g. while testing).
 MIN_FEED_SECONDS = 120
 
 # Break screen between the two feeds: how long the "loading the second part"
 # wait lasts before the participant can start feed 2.
-BREAK_LOADING_SECONDS = 10
+BREAK_LOADING_SECONDS = 3
 
 # Card tint strength when the source is visible: 0 = white, 1 = full colour.
 CARD_TINT = 0.16
@@ -121,11 +133,11 @@ DEV_MODE = False           # True: ?condition=1..4 in the URL forces a condition
 ESTIMATED_MINUTES = "15–20"
 PROLIFIC_RETURN_URL = "https://app.prolific.com/submissions/complete?cc={code}"
 
-# New tab names (v2): the columns changed with the single-feed design, so the
-# data go to fresh tabs instead of being mixed with the old pilot data.
-SHEET_ASSIGNMENTS = "assignments_v2"
-SHEET_SESSIONS = "sessions_v2"
-SHEET_RESPONSES = "responses_v2"
+# New tab names (v3): the columns changed with the repeated feed, so the
+# data go to fresh tabs instead of being mixed with the v2 data.
+SHEET_ASSIGNMENTS = "assignments_v3"
+SHEET_SESSIONS = "sessions_v3"
+SHEET_RESPONSES = "responses_v3"
 
 ASSIGNMENT_HEADERS = ["session_id", "prolific_pid", "condition", "assigned_at_utc"]
 
@@ -135,6 +147,7 @@ SESSION_HEADERS = [
     "color_map", "phase1_order", "phase2_order", "article_split",
     "opened_at_utc", "started_at_utc", "completed_at_utc",
     "duration_min", "n_articles", "n_readmore", "n_full", "n_likes",
+    "phase1_max_round", "phase2_max_round",
     "user_agent", "app_version",
 ]
 
@@ -143,9 +156,10 @@ RESPONSE_HEADERS = [
     "phase", "page_number", "topic", "position",
     "article_uid", "outlet", "reliability_class", "outlet_color",
     "source_visible", "text_version", "title_shown", "n_sentences", "n_chars",
-    "readmore_available", "readmore_clicked", "readmore_ms", "readmore_ts",
-    "full_available", "full_clicked", "full_ms", "full_ts",
+    "readmore_available", "readmore_clicked", "readmore_ms", "readmore_ts", "readmore_round",
+    "full_available", "full_clicked", "full_ms", "full_ts", "full_round",
     "liked_final", "like_toggles", "like_history",
+    "rounds_shown", "max_round_reached",
     "page_enter_ts", "page_exit_ts", "page_duration_ms", "page_duration_server_s",
     "year", "month", "rating",
 ]
@@ -604,7 +618,8 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   .like.pop svg { animation: pop .28s ease-out; }
   @keyframes pop { 0% { transform: scale(1); } 40% { transform: scale(.78); } 100% { transform: scale(1); } }
 
-  .actions { display: flex; justify-content: flex-end; margin-top: 26px; }
+  /* Fallback only: used when the fixed bar cannot be placed in the page. */
+  .actions { display: flex; justify-content: flex-end; margin: 0 0 20px; }
   .next { appearance: none; border: 0; height: 48px; padding: 0 30px; border-radius: 24px;
           background: var(--ink); color: #FFFFFF; font: 600 16px/1 var(--sans); cursor: pointer;
           font-variant-numeric: tabular-nums; transition: opacity .15s; }
@@ -632,11 +647,13 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   "use strict";
 
   var THUMB = '__THUMB_SVG__';
+  var BAR_ID = "nps-feedbar";
   var root = document.getElementById("root");
   var state = null;
   var currentPage = null;
   var lastHeight = -1;
   var countdown = null;
+  var viewObserver = null;
 
   // ---- Streamlit component protocol -------------------------------------
   function send(type, data) {
@@ -673,6 +690,28 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     return "rgb(" + rgb.join(", ") + ")";
   }
 
+  // ---- parent page (same origin as the Streamlit app) --------------------
+  function parentDoc() {
+    try { var d = window.parent.document; return (d && d.body) ? d : null; }
+    catch (err) { return null; }
+  }
+
+  // The element that scrolls the Streamlit page (the closest scrollable
+  // ancestor of this iframe, or the document itself).
+  function parentScroller() {
+    var d = parentDoc();
+    if (!d) return null;
+    try {
+      var n = window.frameElement ? window.frameElement.parentElement : null;
+      while (n && n !== d.body && n !== d.documentElement) {
+        var oy = window.parent.getComputedStyle(n).overflowY;
+        if ((oy === "auto" || oy === "scroll") && n.scrollHeight > n.clientHeight) return n;
+        n = n.parentElement;
+      }
+    } catch (err) { /* ignore */ }
+    return d.scrollingElement || d.documentElement;
+  }
+
   function scrollParentToTop() {
     try {
       var d = window.parent.document;
@@ -696,6 +735,34 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
       if (w.__npsLeaveGuard) { w.removeEventListener("beforeunload", w.__npsLeaveGuard); w.__npsLeaveGuard = null; }
     } catch (err) { /* ignore */ }
   }
+
+  // Continue / Finish button in a bar fixed at the bottom of the screen
+  // (placed in the Streamlit page, styled by the app CSS: #nps-feedbar).
+  function removeBar() {
+    var d = parentDoc();
+    if (!d) return;
+    var old = d.getElementById(BAR_ID);
+    if (old && old.parentNode) old.parentNode.removeChild(old);
+  }
+  function mountBar() {
+    var d = parentDoc();
+    if (!d) return null;
+    try {
+      removeBar();
+      var bar = d.createElement("div");
+      bar.id = BAR_ID;
+      var inner = d.createElement("div");
+      inner.className = "nps-feedbar-inner";
+      var btn = d.createElement("button");
+      btn.type = "button";
+      btn.className = "nps-feedbar-btn";
+      inner.appendChild(btn);
+      bar.appendChild(inner);
+      d.body.appendChild(bar);
+      return btn;
+    } catch (err) { return null; }
+  }
+  window.addEventListener("pagehide", removeBar);
 
   // ---- article text ------------------------------------------------------
   // The text is flattened to one string: sentences joined by a space,
@@ -722,16 +789,18 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     return i;
   }
 
+  // The reading stage belongs to the article, so all its copies share it.
   function visibleChars(a) {
     if (a.stage === 0) return cutAt(a.flat, state.previewChars);
     if (a.stage === 1) return cutAt(a.flat, state.readmoreChars);
     return a.flat.length;
   }
 
-  // Renders the visible text grouped in paragraphs, with the inline
-  // "... Read more" / "... Read full article" link after it.
-  function renderBody(a, prevVisible) {
-    var body = a.bodyEl;
+  // Renders the visible text of one copy, grouped in paragraphs, with the
+  // inline "... Read more" / "... Read full article" link after it. Text past
+  // `prevVisible` fades in.
+  function renderBody(a, inst, prevVisible) {
+    var body = inst.bodyEl;
     var vis = visibleChars(a);
     body.textContent = "";
     var paras = a.flat.split("\n");
@@ -755,36 +824,80 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     p.appendChild(document.createTextNode(" "));
     var link = el("button", "more", "… " + label);
     link.type = "button";
-    link.addEventListener("click", function () { expand(a, nextStage, vis); });
+    link.addEventListener("click", function () { expand(a, inst, nextStage); });
     p.appendChild(link);
     return link;
   }
 
-  function expand(a, nextStage, prevVisible) {
+  // Opens the article on every copy. Copies above the clicked one grow too,
+  // so the page is scrolled by the same amount to keep the clicked card still.
+  function expand(a, inst, nextStage) {
     if (state.submitted || a.stage >= nextStage) return;
+    var prevVisible = visibleChars(a);
     var t = ms(), ts = iso();
-    if (nextStage === 1) { a.readmore_ms = t; a.readmore_ts = ts; }
-    else { a.full_ms = t; a.full_ts = ts; }
+    if (nextStage === 1) { a.readmore_ms = t; a.readmore_ts = ts; a.readmore_round = inst.round; }
+    else { a.full_ms = t; a.full_ts = ts; a.full_round = inst.round; }
     a.stage = nextStage;
-    var nextLink = renderBody(a, prevVisible);
+
+    var topBefore = inst.card.getBoundingClientRect().top;
+    var nextLink = null;
+    for (var i = 0; i < a.instances.length; i++) {
+      var other = a.instances[i];
+      if (other === inst) nextLink = renderBody(a, other, prevVisible);
+      else renderBody(a, other, Number.MAX_SAFE_INTEGER);
+    }
+    var shift = inst.card.getBoundingClientRect().top - topBefore;
+    if (Math.abs(shift) >= 1) {
+      var scroller = parentScroller();
+      if (scroller) scroller.scrollTop += shift;
+    }
     if (nextLink) { try { nextLink.focus({ preventScroll: true }); } catch (e) {} }
     updateHeight();
   }
 
-  function buildLike(a) {
+  // Like is shared by all copies of the article.
+  function paintLike(b, liked) {
+    b.classList.toggle("on", liked);
+    b.setAttribute("aria-pressed", liked ? "true" : "false");
+  }
+  function buildLike(a, inst) {
     var b = el("button", "like");
     b.type = "button";
-    b.setAttribute("aria-pressed", "false");
     b.innerHTML = THUMB + "<span>Like</span>";
+    paintLike(b, a.liked);
     b.addEventListener("click", function () {
       if (state.submitted) return;
       a.liked = !a.liked;
-      a.history.push({ liked: a.liked, ms: ms(), ts: iso() });
-      b.classList.toggle("on", a.liked);
-      b.setAttribute("aria-pressed", a.liked ? "true" : "false");
+      a.history.push({ liked: a.liked, round: inst.round, ms: ms(), ts: iso() });
+      for (var i = 0; i < a.likeButtons.length; i++) paintLike(a.likeButtons[i], a.liked);
       b.classList.remove("pop"); void b.offsetWidth; b.classList.add("pop");
     });
+    a.likeButtons.push(b);
     return b;
+  }
+
+  function buildCard(a, round) {
+    var card = el("article", "card");
+    if (a.color) {
+      card.classList.add("sourced");
+      card.style.background = tint(a.color, state.tintAlpha);
+      card.style.borderColor = a.color;
+      var ribbon = el("div", "ribbon");
+      ribbon.style.background = a.color;
+      ribbon.setAttribute("aria-hidden", "true");
+      card.appendChild(ribbon);
+    }
+    if (a.title) card.appendChild(el("h2", "headline", a.title));
+    var inst = { round: round, card: card, bodyEl: el("div", "body") };
+    card.appendChild(inst.bodyEl);
+    var foot = el("div", "foot");
+    foot.appendChild(buildLike(a, inst));
+    card.appendChild(foot);
+    a.instances.push(inst);
+    renderBody(a, inst, Number.MAX_SAFE_INTEGER);
+    card.setAttribute("data-round", String(round));
+    if (viewObserver) viewObserver.observe(card);
+    return card;
   }
 
   // ---- minimum time on the feed -------------------------------------------
@@ -809,13 +922,27 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   // ---- page --------------------------------------------------------------
   function buildPage(args) {
+    if (viewObserver) { viewObserver.disconnect(); viewObserver = null; }
     state = {
       t0: performance.now(), enterTs: iso(), submitted: false, isLast: !!args.is_last,
       previewChars: args.preview_chars || 50, readmoreChars: args.readmore_chars || 144,
       tintAlpha: (typeof args.card_tint === "number") ? args.card_tint : 0.16,
-      minMs: Math.max(0, (args.min_seconds || 0) * 1000), items: []
+      minMs: Math.max(0, (args.min_seconds || 0) * 1000),
+      rounds: Math.max(1, args.repeat_rounds || 1), maxRound: 0, articles: []
     };
     root.textContent = "";
+
+    // Furthest round the participant scrolled to (a card at least half visible).
+    if (window.IntersectionObserver) {
+      viewObserver = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (!en.isIntersecting) return;
+          var r = Number(en.target.getAttribute("data-round")) || 0;
+          if (r > state.maxRound) state.maxRound = r;
+          viewObserver.unobserve(en.target);
+        });
+      }, { threshold: 0.5 });
+    }
 
     var head = el("div", "progress");
     head.appendChild(el("span", "progress-label", "Feed " + args.page_number + " of " + args.total_pages));
@@ -830,46 +957,40 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     head.appendChild(track);
     root.appendChild(head);
 
-    var feed = el("div", "feed");
-    (args.articles || []).forEach(function (art, i) {
+    var label = args.is_last ? "Finish" : "Continue";
+    var next = mountBar();
+    if (!next) {
+      // Fallback: the page could not be reached, so the button goes on top.
+      var actions = el("div", "actions");
+      next = el("button", "next");
+      next.type = "button";
+      actions.appendChild(next);
+      root.appendChild(actions);
+    }
+    next.textContent = label;
+    next.addEventListener("click", function () { submit(next); });
+
+    state.articles = (args.articles || []).map(function (art, i) {
       var sentences = art.sentences || [];
       var a = {
-        uid: String(art.uid), position: i + 1, sentences: sentences, flat: flatten(sentences),
-        stage: 0, readmore_ms: null, readmore_ts: null, full_ms: null, full_ts: null,
-        liked: false, history: []
+        uid: String(art.uid), position: i + 1, color: art.color || null, title: art.title || "",
+        sentences: sentences, flat: flatten(sentences),
+        stage: 0, readmore_ms: null, readmore_ts: null, readmore_round: null,
+        full_ms: null, full_ts: null, full_round: null,
+        liked: false, history: [], instances: [], likeButtons: []
       };
       a.readmoreAvailable = a.flat.length > state.previewChars;
       a.fullAvailable = a.flat.length > state.readmoreChars;
-
-      var card = el("article", "card");
-      if (art.color) {
-        card.classList.add("sourced");
-        card.style.background = tint(art.color, state.tintAlpha);
-        card.style.borderColor = art.color;
-        var ribbon = el("div", "ribbon");
-        ribbon.style.background = art.color;
-        ribbon.setAttribute("aria-hidden", "true");
-        card.appendChild(ribbon);
-      }
-      if (art.title) card.appendChild(el("h2", "headline", art.title));
-      a.bodyEl = el("div", "body");
-      card.appendChild(a.bodyEl);
-      var foot = el("div", "foot");
-      foot.appendChild(buildLike(a));
-      card.appendChild(foot);
-      renderBody(a, Number.MAX_SAFE_INTEGER);
-      state.items.push(a);
-      feed.appendChild(card);
+      return a;
     });
+
+    // The same sequence, repeated `rounds` times.
+    var feed = el("div", "feed");
+    for (var r = 1; r <= state.rounds; r++) {
+      for (var i = 0; i < state.articles.length; i++) feed.appendChild(buildCard(state.articles[i], r));
+    }
     root.appendChild(feed);
 
-    var actions = el("div", "actions");
-    var label = args.is_last ? "Finish" : "Continue";
-    var next = el("button", "next", label);
-    next.type = "button";
-    next.addEventListener("click", function () { submit(next); });
-    actions.appendChild(next);
-    root.appendChild(actions);
     startCountdown(next, label);
 
     requestAnimationFrame(function () {
@@ -887,16 +1008,21 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     state.submitted = true;
     button.disabled = true;
     button.textContent = "One moment…";
+    if (viewObserver) { viewObserver.disconnect(); viewObserver = null; }
     var payload = {
       page_id: currentPage,
       page_enter_ts: state.enterTs,
       page_exit_ts: iso(),
       page_duration_ms: ms(),
-      articles: state.items.map(function (a) {
+      rounds_shown: state.rounds,
+      max_round_reached: state.maxRound,
+      articles: state.articles.map(function (a) {
         return {
           uid: a.uid, position: a.position, n_sentences: a.sentences.length, n_chars: a.flat.length,
-          readmore_available: a.readmoreAvailable, readmore_ms: a.readmore_ms, readmore_ts: a.readmore_ts,
-          full_available: a.fullAvailable, full_ms: a.full_ms, full_ts: a.full_ts,
+          readmore_available: a.readmoreAvailable, readmore_ms: a.readmore_ms,
+          readmore_ts: a.readmore_ts, readmore_round: a.readmore_round,
+          full_available: a.fullAvailable, full_ms: a.full_ms,
+          full_ts: a.full_ts, full_round: a.full_round,
           liked: a.liked, like_history: a.history
         };
       })
@@ -1022,6 +1148,28 @@ li.nps-row::marker { content: none; }
 }
 .nps-plain { font-size: 16px; line-height: 1.55; color: var(--ink-2); margin: 0 0 40px; }
 
+/* ---------- Continue / Finish bar, fixed at the bottom during a feed ---------- */
+#nps-feedbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 999990;
+  padding: 28px 16px calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, rgba(236, 238, 241, 0), var(--canvas) 55%);
+  pointer-events: none;
+}
+.nps-feedbar-inner {
+  max-width: 700px; margin: 0 auto; padding: 0 1.25rem;
+  display: flex; justify-content: flex-end;
+}
+.nps-feedbar-btn {
+  pointer-events: auto; appearance: none; border: 0; height: 48px; padding: 0 30px;
+  border-radius: 24px; background: var(--ink); color: #FFFFFF;
+  font: 600 16px/1 var(--sans); cursor: pointer; font-variant-numeric: tabular-nums;
+  box-shadow: 0 6px 18px rgba(25, 28, 32, .18); transition: background-color .15s;
+}
+.nps-feedbar-btn:disabled { background: #8B9097; cursor: default; box-shadow: none; }
+.nps-feedbar-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+body:has(#nps-feedbar) [data-testid="stMainBlockContainer"],
+body:has(#nps-feedbar) .block-container { padding-bottom: 120px !important; }
+
 /* ---------- break between the feeds ---------- */
 .nps-kicker {
   font-size: 14px; font-weight: 600; color: var(--ink-3); letter-spacing: .02em;
@@ -1072,6 +1220,8 @@ li.nps-row::marker { content: none; }
   .nps-lead { font-size: 18px; }
   li.nps-row { grid-template-columns: 1fr; gap: 10px; }
   .nps-code { padding: 20px 18px 16px; }
+  .nps-feedbar-inner { padding: 0; }
+  .nps-feedbar-btn { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .nps-spinner { animation-duration: 2.4s; }
@@ -1144,7 +1294,8 @@ def start_study(data):
             split["2"][t].append(uids[1])
 
     # One feed per phase with all its articles; the order mixes topics and
-    # outlets and is drawn independently for the two phases.
+    # outlets and is drawn independently for the two phases. The feed repeats
+    # this same order REPEAT_ROUNDS times.
     order = {}
     for phase in ("1", "2"):
         uids = [u for t in topics for u in split[phase][t]]
@@ -1207,13 +1358,17 @@ def record_page(data, page, page_id, result, cards):
             "readmore_clicked": item.get("readmore_ms") is not None,
             "readmore_ms": item.get("readmore_ms"),
             "readmore_ts": item.get("readmore_ts"),
+            "readmore_round": item.get("readmore_round"),
             "full_available": bool(item.get("full_available")),
             "full_clicked": item.get("full_ms") is not None,
             "full_ms": item.get("full_ms"),
             "full_ts": item.get("full_ts"),
+            "full_round": item.get("full_round"),
             "liked_final": bool(item.get("liked")),
             "like_toggles": len(history),
             "like_history": json.dumps(history),
+            "rounds_shown": result.get("rounds_shown"),
+            "max_round_reached": result.get("max_round_reached"),
             "page_enter_ts": result.get("page_enter_ts"),
             "page_exit_ts": result.get("page_exit_ts"),
             "page_duration_ms": result.get("page_duration_ms"),
@@ -1228,6 +1383,11 @@ def build_session_row():
     ss = st.session_state
     resp = ss.responses
     duration = round((time.time() - ss.started_ts) / 60, 2) if ss.started_ts else None
+
+    def max_round(phase):
+        rows = [r for r in resp if r["phase"] == phase]
+        return rows[0]["max_round_reached"] if rows else None
+
     return {
         "session_id": ss.session_id,
         "prolific_pid": ss.prolific_pid,
@@ -1248,6 +1408,8 @@ def build_session_row():
         "n_readmore": sum(1 for r in resp if r["readmore_clicked"]),
         "n_full": sum(1 for r in resp if r["full_clicked"]),
         "n_likes": sum(1 for r in resp if r["liked_final"]),
+        "phase1_max_round": max_round(1),
+        "phase2_max_round": max_round(2),
         "user_agent": ss.user_agent,
         "app_version": APP_VERSION,
     }
@@ -1309,7 +1471,6 @@ def render_setup_error(errors):
 
 def render_intro(data):
     n_feeds = 2
-    n_per_feed = len(data["topics"]) * len(data["outlets"])
     swatches = "".join(
         f'<span style="background:{tint_hex(c, CARD_TINT)};border-color:{c}"></span>'
         for c in OUTLET_PALETTE[: len(data["outlets"])]
@@ -1322,7 +1483,7 @@ def render_intro(data):
     st.html(f"""
 <section class="nps-intro">
   <h1 class="nps-title">News Perception Study</h1>
-  <p class="nps-lead">You'll browse {number_word(n_feeds)} news feeds with {number_word(n_per_feed)} articles each. Read them the way you'd read news online.</p>
+  <p class="nps-lead">You'll browse {number_word(n_feeds)} news feeds. Read them the way you'd read news online.</p>
   <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes, with a short break between the two feeds. Please finish in one sitting and don't refresh the page.</p>
 
   <h2 class="nps-h2">How it works</h2>
@@ -1341,7 +1502,7 @@ def render_intro(data):
     </li>
     <li class="nps-row">
       <div class="nps-token"><span class="tok-next">Continue</span></div>
-      <p>When you've finished a feed, click <b>Continue</b> at the bottom of the page.{wait_note} You can't go back to an earlier feed.</p>
+      <p>When you want to move on, click <b>Continue</b> at the bottom of the screen.{wait_note} You can't go back to an earlier feed.</p>
     </li>
   </ul>
   <p class="nps-plain">There's no right or wrong way to do this.</p>
@@ -1375,6 +1536,7 @@ def render_feed(data):
         total_pages=len(ss.pages),
         is_last=page["page_number"] == len(ss.pages),
         articles=cards,
+        repeat_rounds=REPEAT_ROUNDS,
         preview_chars=PREVIEW_CHARS,
         readmore_chars=READMORE_CHARS,
         min_seconds=MIN_FEED_SECONDS,
@@ -1398,29 +1560,28 @@ def render_feed(data):
 
 
 def render_break():
-    """Pause between the two feeds: an invitation to rest, a short
-    'loading the second part' wait, then the button to start feed 2.
-    The break length can be computed from the data as
-    page_enter_ts (feed 2) - page_exit_ts (feed 1)."""
+    """Short pause between the two feeds: a brief 'loading the second part'
+    wait, then the button to start feed 2. The break length can be computed
+    from the data as page_enter_ts (feed 2) - page_exit_ts (feed 1)."""
     ss = st.session_state
     done = ss.page_idx
     total = len(ss.pages)
     st.html(f"""
 <section class="nps-break">
   <p class="nps-kicker">Feed {done} of {total} complete</p>
-  <h1 class="nps-title">Take a short break</h1>
-  <p class="nps-lead">You've finished the first part. Before you start the second one, take a moment for yourself: look away from the screen, stretch, take a breath.</p>
-  <p class="nps-sub">The second feed works the same way as the first. Please don't refresh or close this page.</p>
+  <h1 class="nps-title">Short break</h1>
+  <p class="nps-lead">You've finished the first part. Take a moment, then start the second one.</p>
+  <p class="nps-sub">It works the same way as the first. Please don't refresh or close this page.</p>
 </section>""")
 
     slot = st.empty()
-    if not ss.break_ready:
+    if not ss.break_ready and BREAK_LOADING_SECONDS > 0:
         slot.html('<div class="nps-loading" role="status">'
                   '<span class="nps-spinner" aria-hidden="true"></span>'
-                  'Please wait, we are loading the second part…</div>')
+                  'Loading the second part…</div>')
         time.sleep(BREAK_LOADING_SECONDS)
-        ss.break_ready = True
         slot.empty()
+    ss.break_ready = True
 
     if st.button("Start the second part", type="primary", key="break_button"):
         ss.stage = "feed"
@@ -1475,13 +1636,17 @@ def main():
     if "nps_ready" not in st.session_state:
         init_session()
 
+    stage = st.session_state.stage
+    if stage != "feed":
+        # The Continue bar belongs to the feed only.
+        st.html("<style>#nps-feedbar { display: none !important; }</style>")
+
     mtime = os.path.getmtime(ARTICLES_CSV) if os.path.exists(ARTICLES_CSV) else 0.0
     data, errors = load_study_data(ARTICLES_CSV, mtime)
     if errors:
         render_setup_error(errors)
         return
 
-    stage = st.session_state.stage
     if stage == "intro":
         render_intro(data)
     elif stage == "feed":
