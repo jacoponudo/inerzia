@@ -24,9 +24,10 @@ Interaction per article:
 
 The "Continue" / "Finish" button sits in a bar fixed at the bottom of the
 screen (always reachable, however far the participant scrolls). It unlocks
-only after MIN_FEED_SECONDS (default 2 minutes), with a countdown on it.
-Between the two feeds a short break screen shows a brief "loading the second
-part" wait (BREAK_LOADING_SECONDS) before the participant can go on.
+only after MIN_FEED_SECONDS (default 2 minutes), but the countdown appears
+on it only during the last COUNTDOWN_VISIBLE_SECONDS, so the feed never
+looks like a timed task. Between the two feeds a "loading the second feed"
+wait (BREAK_LOADING_SECONDS) runs before the participant can go on.
 
 Every card shows the headline from the `Title` column (the same headline in
 both text versions). The LLM-rewritten text comes from the `LLM_text` column.
@@ -62,7 +63,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-07.3"
+APP_VERSION = "2026-10-08.1"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -105,9 +106,15 @@ REPEAT_ROUNDS = 10
 # Set to 0 to disable (e.g. while testing).
 MIN_FEED_SECONDS = 120
 
-# Break screen between the two feeds: how long the "loading the second part"
-# wait lasts before the participant can start feed 2.
-BREAK_LOADING_SECONDS = 3
+# How long before the unlock the countdown becomes visible on the button.
+# Until then the button just reads "Continue" / "Finish" (greyed out), so
+# the participant never sees a clock running against them.
+# Set to 0 to never show the countdown.
+COUNTDOWN_VISIBLE_SECONDS = 10
+
+# Wait between the two feeds: how long the "loading the second feed" screen
+# lasts before the participant can start feed 2.
+BREAK_LOADING_SECONDS = 10
 
 # Card tint strength when the source is visible: 0 = white, 1 = full colour.
 CARD_TINT = 0.16
@@ -220,14 +227,6 @@ def number_word(n):
              "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
              "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"]
     return words[n] if 0 <= n < len(words) else str(n)
-
-
-def duration_words(seconds):
-    """120 -> 'two minutes', 60 -> 'one minute', 90 -> '90 seconds'."""
-    if seconds % 60 == 0:
-        m = seconds // 60
-        return f"{number_word(m)} minute{'s' if m != 1 else ''}"
-    return f"{seconds} seconds"
 
 
 def tint_hex(hex_color, alpha):
@@ -619,11 +618,16 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   @keyframes pop { 0% { transform: scale(1); } 40% { transform: scale(.78); } 100% { transform: scale(1); } }
 
   /* Fallback only: used when the fixed bar cannot be placed in the page. */
-  .actions { display: flex; justify-content: flex-end; margin: 0 0 20px; }
+  .actions { display: flex; flex-direction: column; align-items: center; gap: 9px; margin: 0 0 20px; }
+  /* min-height keeps the button still when the hint fades in. */
+  .hint { margin: 0; font-size: 13.5px; line-height: 1.4; min-height: 1.4em; color: var(--ink-3);
+          text-align: center; opacity: 0; transition: opacity .35s ease; }
+  .hint.on { opacity: 1; }
   .next { appearance: none; border: 0; height: 48px; padding: 0 30px; border-radius: 24px;
           background: var(--ink); color: #FFFFFF; font: 600 16px/1 var(--sans); cursor: pointer;
-          font-variant-numeric: tabular-nums; transition: opacity .15s; }
-  .next:disabled { opacity: .55; cursor: default; }
+          min-width: 215px; text-align: center;
+          font-variant-numeric: tabular-nums; transition: background-color .15s; }
+  .next[aria-disabled="true"], .next:disabled { background: #8B9097; cursor: default; }
 
   button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 
@@ -633,6 +637,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     .ribbon { left: 17px; }
     .headline { font-size: 19px; }
     .body { font-size: 16.5px; }
+    .actions { align-items: stretch; }
     .next { width: 100%; }
   }
   @media (prefers-reduced-motion: reduce) {
@@ -648,6 +653,9 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   var THUMB = '__THUMB_SVG__';
   var BAR_ID = "nps-feedbar";
+  // Shown once the button unlocks, and when it is clicked too early.
+  var UNLOCK_HINT = "Take your time \u2014 you can now proceed whenever you want.";
+  var LOCKED_HINT = "You'll be able to continue in a moment.";
   var root = document.getElementById("root");
   var state = null;
   var currentPage = null;
@@ -677,7 +685,6 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   }
   function ms() { return Math.round(performance.now() - state.t0); }
   function iso() { return new Date().toISOString(); }
-  function clock(s) { var m = Math.floor(s / 60), r = s % 60; return m + ":" + (r < 10 ? "0" : "") + r; }
 
   // Opaque mix of a hex colour with white (alpha 0 = white, 1 = full colour).
   function tint(hex, alpha) {
@@ -753,13 +760,16 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
       bar.id = BAR_ID;
       var inner = d.createElement("div");
       inner.className = "nps-feedbar-inner";
+      var hint = d.createElement("p");
+      hint.className = "nps-feedbar-hint";
       var btn = d.createElement("button");
       btn.type = "button";
       btn.className = "nps-feedbar-btn";
+      inner.appendChild(hint);
       inner.appendChild(btn);
       bar.appendChild(inner);
       d.body.appendChild(bar);
-      return btn;
+      return { btn: btn, hint: hint };
     } catch (err) { return null; }
   }
   window.addEventListener("pagehide", removeBar);
@@ -901,20 +911,42 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   }
 
   // ---- minimum time on the feed -------------------------------------------
-  // The Continue / Finish button stays disabled, with a countdown, until
-  // `minMs` have passed since the feed was shown. performance.now() keeps
-  // counting correctly even if the browser throttles timers in a background tab.
-  function startCountdown(button, label) {
+  // The Continue / Finish button stays locked until `minMs` have passed since
+  // the feed was shown. The countdown only appears during the last `revealMs`,
+  // so the feed doesn't look like a timed task; before that the button simply
+  // reads "Continue" / "Finish", greyed out. performance.now() keeps counting
+  // correctly even if the browser throttles timers in a background tab.
+  function setHint(hint, text) {
+    if (!hint || hint.__text === text) return;
+    hint.__text = text;
+    hint.textContent = text || "";
+    hint.classList.toggle("on", !!text);
+  }
+
+  function setLocked(button, locked) {
+    button.setAttribute("aria-disabled", locked ? "true" : "false");
+  }
+
+  function startCountdown(button, hint, label) {
     if (countdown) { clearInterval(countdown); countdown = null; }
     function tick() {
       var left = state.minMs - ms();
       if (left <= 0) {
         if (countdown) { clearInterval(countdown); countdown = null; }
-        if (!state.submitted) { button.disabled = false; button.textContent = label; }
+        if (!state.submitted) {
+          setLocked(button, false);
+          button.textContent = label;
+          setHint(hint, UNLOCK_HINT);
+        }
         return;
       }
-      button.disabled = true;
-      button.textContent = label + " in " + clock(Math.ceil(left / 1000));
+      setLocked(button, true);
+      if (state.revealMs > 0 && left <= state.revealMs) {
+        button.textContent = "You can proceed in " + Math.ceil(left / 1000) + "s";
+      } else {
+        button.textContent = label;
+      }
+      setHint(hint, (performance.now() < state.nudgeUntil) ? LOCKED_HINT : "");
     }
     tick();
     if (state.minMs > 0) countdown = setInterval(tick, 250);
@@ -928,6 +960,8 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
       previewChars: args.preview_chars || 50, readmoreChars: args.readmore_chars || 144,
       tintAlpha: (typeof args.card_tint === "number") ? args.card_tint : 0.16,
       minMs: Math.max(0, (args.min_seconds || 0) * 1000),
+      revealMs: Math.max(0, (args.countdown_visible_seconds || 0) * 1000),
+      nudgeUntil: 0, hintEl: null,
       rounds: Math.max(1, args.repeat_rounds || 1), maxRound: 0, articles: []
     };
     root.textContent = "";
@@ -958,16 +992,24 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     root.appendChild(head);
 
     var label = args.is_last ? "Finish" : "Continue";
-    var next = mountBar();
-    if (!next) {
+    var mounted = mountBar();
+    var next, hint;
+    if (mounted) {
+      next = mounted.btn;
+      hint = mounted.hint;
+    } else {
       // Fallback: the page could not be reached, so the button goes on top.
       var actions = el("div", "actions");
+      hint = el("p", "hint");
       next = el("button", "next");
       next.type = "button";
+      actions.appendChild(hint);
       actions.appendChild(next);
       root.appendChild(actions);
     }
+    state.hintEl = hint;
     next.textContent = label;
+    setLocked(next, state.minMs > 0);
     next.addEventListener("click", function () { submit(next); });
 
     state.articles = (args.articles || []).map(function (art, i) {
@@ -991,7 +1033,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     }
     root.appendChild(feed);
 
-    startCountdown(next, label);
+    startCountdown(next, hint, label);
 
     requestAnimationFrame(function () {
       requestAnimationFrame(function () {
@@ -1004,10 +1046,17 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   }
 
   function submit(button) {
-    if (state.submitted || ms() < state.minMs) return;
+    if (state.submitted) return;
+    if (ms() < state.minMs) {
+      // Clicked too early: say so instead of looking broken.
+      state.nudgeUntil = performance.now() + 2600;
+      setHint(state.hintEl, LOCKED_HINT);
+      return;
+    }
     state.submitted = true;
-    button.disabled = true;
+    setLocked(button, true);
     button.textContent = "One moment…";
+    setHint(state.hintEl, "");
     if (viewObserver) { viewObserver.disconnect(); viewObserver = null; }
     var payload = {
       page_id: currentPage,
@@ -1151,34 +1200,41 @@ li.nps-row::marker { content: none; }
 /* ---------- Continue / Finish bar, fixed at the bottom during a feed ---------- */
 #nps-feedbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 999990;
-  padding: 28px 16px calc(16px + env(safe-area-inset-bottom));
-  background: linear-gradient(to bottom, rgba(236, 238, 241, 0), var(--canvas) 55%);
+  padding: 40px 16px calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(to bottom, rgba(236, 238, 241, 0), var(--canvas) 42%);
   pointer-events: none;
 }
 .nps-feedbar-inner {
   max-width: 700px; margin: 0 auto; padding: 0 1.25rem;
-  display: flex; justify-content: flex-end;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
+/* min-height keeps the button still when the hint fades in. */
+.nps-feedbar-hint {
+  margin: 0; font-size: 13.5px; line-height: 1.4; min-height: 1.4em;
+  color: var(--ink-3); text-align: center;
+  opacity: 0; transition: opacity .35s ease; pointer-events: none;
+}
+.nps-feedbar-hint.on { opacity: 1; }
 .nps-feedbar-btn {
   pointer-events: auto; appearance: none; border: 0; height: 48px; padding: 0 30px;
   border-radius: 24px; background: var(--ink); color: #FFFFFF;
   font: 600 16px/1 var(--sans); cursor: pointer; font-variant-numeric: tabular-nums;
+  min-width: 215px; text-align: center;
   box-shadow: 0 6px 18px rgba(25, 28, 32, .18); transition: background-color .15s;
 }
-.nps-feedbar-btn:disabled { background: #8B9097; cursor: default; box-shadow: none; }
+.nps-feedbar-btn[aria-disabled="true"], .nps-feedbar-btn:disabled {
+  background: #8B9097; cursor: default; box-shadow: none;
+}
 .nps-feedbar-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
 body:has(#nps-feedbar) [data-testid="stMainBlockContainer"],
-body:has(#nps-feedbar) .block-container { padding-bottom: 120px !important; }
+body:has(#nps-feedbar) .block-container { padding-bottom: 160px !important; }
 
-/* ---------- break between the feeds ---------- */
-.nps-kicker {
-  font-size: 14px; font-weight: 600; color: var(--ink-3); letter-spacing: .02em;
-  margin: 0 0 14px; font-variant-numeric: tabular-nums;
-}
-.nps-break .nps-sub { margin-bottom: 30px; }
+/* ---------- wait between the feeds ---------- */
+.nps-wait { padding: 10vh 0 0; }
+.nps-wait .nps-sub { margin: 16px 0 0; }
 .nps-loading {
   display: flex; align-items: center; gap: 12px; min-height: 48px;
-  font-size: 15px; color: var(--ink-3);
+  font-size: 17px; color: var(--ink-2);
 }
 .nps-spinner {
   flex: none; width: 18px; height: 18px; border-radius: 50%;
@@ -1476,15 +1532,15 @@ def render_intro(data):
         for c in OUTLET_PALETTE[: len(data["outlets"])]
     )
     if MIN_FEED_SECONDS > 0:
-        wait_note = (f" The button becomes active after {duration_words(MIN_FEED_SECONDS)} "
-                     f"on each feed.")
+        wait_note = (" It becomes active once you've spent a little time on the feed, "
+                     "so take your time.")
     else:
         wait_note = ""
     st.html(f"""
 <section class="nps-intro">
   <h1 class="nps-title">News Perception Study</h1>
   <p class="nps-lead">You'll browse {number_word(n_feeds)} news feeds. Read them the way you'd read news online.</p>
-  <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes, with a short break between the two feeds. Please finish in one sitting and don't refresh the page.</p>
+  <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes. Please finish in one sitting and don't refresh the page.</p>
 
   <h2 class="nps-h2">How it works</h2>
   <ul class="nps-rows">
@@ -1540,6 +1596,7 @@ def render_feed(data):
         preview_chars=PREVIEW_CHARS,
         readmore_chars=READMORE_CHARS,
         min_seconds=MIN_FEED_SECONDS,
+        countdown_visible_seconds=COUNTDOWN_VISIBLE_SECONDS,
         card_tint=CARD_TINT,
         warn_on_leave=WARN_ON_LEAVE,
         key=f"feed-{page_id}",
@@ -1560,30 +1617,33 @@ def render_feed(data):
 
 
 def render_break():
-    """Short pause between the two feeds: a brief 'loading the second part'
-    wait, then the button to start feed 2. The break length can be computed
-    from the data as page_enter_ts (feed 2) - page_exit_ts (feed 1)."""
+    """Pause between the two feeds, framed only as loading: the participant
+    is never told to take a break. The pause length can be computed from the
+    data as page_enter_ts (feed 2) - page_exit_ts (feed 1)."""
     ss = st.session_state
-    done = ss.page_idx
-    total = len(ss.pages)
-    st.html(f"""
-<section class="nps-break">
-  <p class="nps-kicker">Feed {done} of {total} complete</p>
-  <h1 class="nps-title">Short break</h1>
-  <p class="nps-lead">You've finished the first part. Take a moment, then start the second one.</p>
+    slot = st.empty()
+
+    if not ss.break_ready and BREAK_LOADING_SECONDS > 0:
+        slot.html("""
+<section class="nps-wait">
+  <div class="nps-loading" role="status">
+    <span class="nps-spinner" aria-hidden="true"></span>
+    <span>Loading the second feed…</span>
+  </div>
+  <p class="nps-sub">Please don't refresh or close this page.</p>
+</section>""")
+        time.sleep(BREAK_LOADING_SECONDS)
+    ss.break_ready = True
+
+    slot.html("""
+<section class="nps-wait">
+  <div class="nps-loading">
+    <span>The second feed is ready.</span>
+  </div>
   <p class="nps-sub">It works the same way as the first. Please don't refresh or close this page.</p>
 </section>""")
 
-    slot = st.empty()
-    if not ss.break_ready and BREAK_LOADING_SECONDS > 0:
-        slot.html('<div class="nps-loading" role="status">'
-                  '<span class="nps-spinner" aria-hidden="true"></span>'
-                  'Loading the second part…</div>')
-        time.sleep(BREAK_LOADING_SECONDS)
-        slot.empty()
-    ss.break_ready = True
-
-    if st.button("Start the second part", type="primary", key="break_button"):
+    if st.button("Continue", type="primary", key="break_button"):
         ss.stage = "feed"
         st.rerun()
 
