@@ -29,8 +29,9 @@ on it only during the last COUNTDOWN_VISIBLE_SECONDS, so the feed never
 looks like a timed task. Between the two feeds a "loading the second feed"
 wait (BREAK_LOADING_SECONDS) runs before the participant can go on.
 
-Every card shows the headline from the `Title` column (the same headline in
-both text versions). The LLM-rewritten text comes from the `LLM_text` column.
+Each card shows the headline that goes with the text version it displays:
+the `Title` column with the original text, the `LLM_title` column with the
+LLM-rewritten text (from the `LLM_text` column).
 
 When the source is visible, the whole card (background + border) is coloured
 with the outlet's colour.
@@ -63,7 +64,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-08.1"
+APP_VERSION = "2026-10-12.1"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -81,6 +82,8 @@ COLUMN_CANDIDATES = {
     "topic": ["topic"],
     "outlet": ["domain", "outlet", "source"],
     "title": ["Title", "title", "headline"],
+    "title_rewritten": ["LLM_title", "llm_title", "rewritten_title", "title_rewritten",
+                        "ai_title", "Title_rewritten"],
     "text": ["clean_text", "text"],
     "text_rewritten": ["LLM_text", "llm_text", "rewritten_text", "text_rewritten",
                        "clean_text_rewritten", "ai_text", "rewritten"],
@@ -89,7 +92,7 @@ COLUMN_CANDIDATES = {
     "year": ["year"],
     "month": ["month"],
 }
-REQUIRED_FIELDS = ("topic", "outlet", "title", "text", "text_rewritten")
+REQUIRED_FIELDS = ("topic", "outlet", "title", "title_rewritten", "text", "text_rewritten")
 
 ARTICLES_PER_CELL = 2      # articles per outlet per topic (1 per phase)
 
@@ -343,11 +346,14 @@ def load_study_data(csv_path, mtime):
         text = str(val("text") or "").strip()
         text_rw = str(val("text_rewritten") or "").strip()
         title = str(val("title") or "").strip()
+        title_rw = str(val("title_rewritten") or "").strip()
 
         if uid in articles:
             errors.append(f"Duplicate article id: {uid}.")
         if not title:
             errors.append(f"Article {uid} has no title ('{cols['title']}' column).")
+        if not title_rw:
+            errors.append(f"Article {uid} has no rewritten title ('{cols['title_rewritten']}' column).")
         if not text:
             errors.append(f"Article {uid} has no original text.")
         if not text_rw:
@@ -359,6 +365,7 @@ def load_study_data(csv_path, mtime):
             "topic": str(val("topic")).strip(),
             "outlet": str(val("outlet")).strip(),
             "title": title,
+            "title_rewritten": title_rw,
             "sentences_original": split_sentences(text),
             "sentences_rewritten": split_sentences(text_rw),
             "reliability": str(val("reliability")).strip() if val("reliability") is not None else None,
@@ -1539,7 +1546,8 @@ def render_intro(data):
     st.html(f"""
 <section class="nps-intro">
   <h1 class="nps-title">News Perception Study</h1>
-  <p class="nps-lead">You'll browse {number_word(n_feeds)} news feeds. Read them the way you'd read news online.</p>
+  <p class="nps-lead">You're about to browse {number_word(n_feeds)} news feeds, one after the other. Each one is a stream of real news articles from different outlets, and you can scroll through it for as long as you like.</p>
+  <p class="nps-lead">The articles are there to be used, not just looked at: open the ones that catch your eye, read as much or as little of them as you want, and like the ones you enjoy. Browse them the way you'd browse news online.</p>
   <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes. Please finish in one sitting and don't refresh the page.</p>
 
   <h2 class="nps-h2">How it works</h2>
@@ -1582,7 +1590,9 @@ def render_feed(data):
         cards.append({
             "uid": uid,
             "color": ss.color_map[art["outlet"]] if page["source_visible"] else None,
-            "title": art["title"],   # same headline (Title column) in both versions
+            # Headline and body always come from the same version: Title +
+            # clean_text for the original, LLM_title + LLM_text for the rewrite.
+            "title": art["title_rewritten"] if rewritten else art["title"],
             "sentences": art["sentences_rewritten"] if rewritten else art["sentences_original"],
         })
 
