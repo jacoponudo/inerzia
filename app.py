@@ -998,7 +998,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     head.appendChild(track);
     root.appendChild(head);
 
-    var label = args.is_last ? "Finish" : "Continue";
+    var label = "Continue";
     var mounted = mountBar();
     var next, hint;
     if (mounted) {
