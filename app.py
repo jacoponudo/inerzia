@@ -9,10 +9,18 @@ Streamlit app for the two-phase news-feed experiment.
     Phase 2 (feed 2): the between-subject treatment (2 x 2):
                       source visible / hidden  x  original / LLM-rewritten.
 
-Each phase is ONE scrolling feed with all its articles (topics x outlets,
-e.g. 4 x 4 = 16), in an order randomised independently for each phase and
-each participant. So that the feed never seems to end, the same sequence is
-repeated REPEAT_ROUNDS times (default 10) one after the other.
+The article set has 3 topics x 4 outlets x 3 articles = 36 articles.
+Phase 1 shows PHASE1_ARTICLES of them (default 20, i.e. 5 per outlet) and
+phase 2 the remaining 16 (4 per outlet). For each participant the split is
+drawn at random among all the splits that keep phase 1 balanced by outlet,
+topic, reliability class and topic x reliability class (see
+compute_split_options); within each topic x outlet cell, which articles go
+to which phase is random too.
+
+Each phase is ONE scrolling feed with all its articles, in an order
+randomised independently for each phase and each participant. So that the
+feed never seems to end, the same sequence is repeated REPEAT_ROUNDS times
+(default 10) one after the other.
 
 The state of an article is shared by all its copies: if the participant
 opens it ("Read more" / "Read full article") or likes it on one copy, every
@@ -42,7 +50,9 @@ Documentation:   app_documentation.txt
 
 import hashlib
 import html as html_lib
+import itertools
 import json
+import math
 import os
 import random
 import re
@@ -51,6 +61,7 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from fractions import Fraction
 from urllib.parse import quote
 
 import pandas as pd
@@ -64,7 +75,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-12.1"
+APP_VERSION = "2026-10-20.1"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -78,7 +89,7 @@ LOCAL_BACKUP_DIR = os.path.join(DATA_DIR, "responses")
 # CSV column names. For each field the app uses the first name it finds.
 # Edit these lists if your CSV uses different names.
 COLUMN_CANDIDATES = {
-    "id": ["id", "article_id"],
+    "id": ["ID", "id", "article_id"],
     "topic": ["topic"],
     "outlet": ["domain", "outlet", "source"],
     "title": ["Title", "title", "headline"],
@@ -94,7 +105,14 @@ COLUMN_CANDIDATES = {
 }
 REQUIRED_FIELDS = ("topic", "outlet", "title", "title_rewritten", "text", "text_rewritten")
 
-ARTICLES_PER_CELL = 2      # articles per outlet per topic (1 per phase)
+ARTICLES_PER_CELL = 3      # articles per outlet per topic (3 topics x 4 outlets x 3 = 36)
+
+# Length of phase 1; phase 2 gets all the other articles (36 - 20 = 16).
+# With 4 outlets: 5 per outlet in phase 1, 4 per outlet in phase 2.
+PHASE1_ARTICLES = 20
+
+# Safety limit on how many candidate splits are checked at start-up.
+MAX_SPLIT_COMBOS = 2 ** 16
 
 # Text visible at each stage, in characters (spaces included). The cut is
 # moved back to the nearest word boundary, so no word is ever split.
@@ -102,7 +120,8 @@ PREVIEW_CHARS = 144         # visible before "Read more"
 READMORE_CHARS = 500       # visible after "Read more" (total)
 
 # How many times the article sequence of a feed is repeated, one after the
-# other, so that the feed never seems to end (16 articles x 10 = 160 cards).
+# other, so that the feed never seems to end (20 articles x 10 = 200 cards
+# in feed 1, 16 x 10 = 160 in feed 2).
 REPEAT_ROUNDS = 10
 
 # Minimum time on each feed before "Continue" / "Finish" can be clicked.
@@ -292,7 +311,7 @@ def n_chars(sentences):
 
 
 # =============================================================================
-# 4. ARTICLES: LOADING AND VALIDATION
+# 4. ARTICLES: LOADING, VALIDATION AND PHASE SPLIT
 # =============================================================================
 
 def _pick_column(df, field):
@@ -319,6 +338,78 @@ def _clean(value):
     return to_py(value)
 
 
+def _near(x):
+    """x rounded down and up (a single value when x is a whole number)."""
+    return sorted({math.floor(x), math.ceil(x)})
+
+
+def compute_split_options(articles, cells, topics, outlets, phase1_n):
+    """All the admissible ways to split the articles between the two phases.
+
+    A split says, for each topic x outlet cell, how many of its articles go
+    to phase 1 (the rest go to phase 2). A split is admissible when:
+      - phase 1 has exactly `phase1_n` articles;
+      - every outlet, every topic, every reliability class and every
+        topic x reliability class gets its proportional share of phase 1
+        (share = phase1_n / total), rounded down or up.
+
+    With 36 articles (3 per cell) and phase1_n = 20 this means, in phase 1:
+    5 articles per outlet; 7, 7 and 6 per topic; 10 reliable and 10
+    unreliable; 3 or 4 reliable and 3 or 4 unreliable per topic.
+
+    Returns (cell_keys, options, error): `cell_keys` lists the cells as
+    (topic, outlet); each option is a tuple with one phase-1 count per cell.
+    """
+    total = len(articles)
+    if not 0 < phase1_n < total:
+        return [], [], (f"PHASE1_ARTICLES must be between 1 and {total - 1} "
+                        f"(found {phase1_n}).")
+
+    share = Fraction(phase1_n, total)
+    keys = [(t, o) for t in topics for o in outlets]
+    sizes = [len(cells[t][o]) for t, o in keys]
+    choices = [_near(n * share) for n in sizes]
+
+    n_combos = 1
+    for c in choices:
+        n_combos *= len(c)
+    if n_combos > MAX_SPLIT_COMBOS:
+        return [], [], (f"Too many candidate splits to check ({n_combos}); "
+                        f"raise MAX_SPLIT_COMBOS or use fewer cells.")
+
+    # Reliability is balanced only when each outlet has a single known class
+    # and there are at least two classes.
+    outlet_class = {}
+    for o in outlets:
+        classes = {a["reliability"] for a in articles.values() if a["outlet"] == o}
+        outlet_class[o] = next(iter(classes)) if len(classes) == 1 else None
+    use_reliability = (all(c not in (None, "NA") for c in outlet_class.values())
+                       and len(set(outlet_class.values())) > 1)
+
+    groups = {}
+    for i, (t, o) in enumerate(keys):
+        groups.setdefault(("outlet", o), []).append(i)
+        groups.setdefault(("topic", t), []).append(i)
+        if use_reliability:
+            groups.setdefault(("reliability", outlet_class[o]), []).append(i)
+            groups.setdefault(("topic x reliability", t, outlet_class[o]), []).append(i)
+    limits = [(idx, set(_near(sum(sizes[i] for i in idx) * share)))
+              for idx in groups.values()]
+
+    options = []
+    for combo in itertools.product(*choices):
+        if sum(combo) != phase1_n:
+            continue
+        if all(sum(combo[i] for i in idx) in allowed for idx, allowed in limits):
+            options.append(tuple(combo))
+
+    if not options:
+        return keys, [], (f"No split puts {phase1_n} articles in phase 1 while keeping "
+                          f"outlets, topics and reliability classes balanced. "
+                          f"Change PHASE1_ARTICLES or the article set.")
+    return keys, options, None
+
+
 @st.cache_data(show_spinner=False)
 def load_study_data(csv_path, mtime):
     """Load and validate the article set. Returns (data, errors).
@@ -342,7 +433,14 @@ def load_study_data(csv_path, mtime):
         def val(field):
             return _clean(row[cols[field]]) if cols[field] else None
 
-        uid = str(val("id")) if cols["id"] and val("id") is not None else f"a{i:02d}"
+        # IDs read as floats (because some are missing) become "12", not "12.0".
+        raw_id = val("id") if cols["id"] else None
+        if isinstance(raw_id, float) and raw_id.is_integer():
+            raw_id = int(raw_id)
+        uid = str(raw_id).strip() if raw_id is not None else f"a{i:02d}"
+        if raw_id is None and cols["id"]:
+            warnings.append(f"Row {i} has no id: using '{uid}'.")
+
         text = str(val("text") or "").strip()
         text_rw = str(val("text_rewritten") or "").strip()
         title = str(val("title") or "").strip()
@@ -373,6 +471,12 @@ def load_study_data(csv_path, mtime):
             "year": val("year"),
             "month": val("month"),
         }
+
+    titles_seen = {}
+    for a in articles.values():
+        if a["title"] and a["title"] in titles_seen:
+            warnings.append(f"Articles {titles_seen[a['title']]} and {a['uid']} have the same title.")
+        titles_seen.setdefault(a["title"], a["uid"])
 
     topics = sorted({a["topic"] for a in articles.values()})
     outlets = sorted({a["outlet"] for a in articles.values()})
@@ -423,11 +527,23 @@ def load_study_data(csv_path, mtime):
         if len(classes) > 1:
             warnings.append(f"Outlet '{o}' has more than one reliability class: {sorted(classes)}.")
 
+    # Admissible phase splits (checked once here, drawn per participant).
+    split_cells, split_options = [], []
+    if not errors:
+        split_cells, split_options, split_error = compute_split_options(
+            articles, cells, topics, outlets, PHASE1_ARTICLES)
+        if split_error:
+            errors.append(split_error)
+        else:
+            log(f"{len(split_options)} balanced phase splits available "
+                f"({PHASE1_ARTICLES} + {len(articles) - PHASE1_ARTICLES} articles).")
+
     for w in warnings:
         log(f"WARNING: {w}")
 
     data = {"articles": articles, "topics": topics, "outlets": outlets,
-            "cells": cells, "columns": cols}
+            "cells": cells, "columns": cols,
+            "split_cells": split_cells, "split_options": split_options}
     return (None, errors) if errors else (data, [])
 
 
@@ -1347,14 +1463,17 @@ def start_study(data):
     _rng.shuffle(colors)
     color_map = dict(zip(outlets, colors))
 
-    # For each topic x outlet, one article goes to phase 1 and one to phase 2.
+    # Phase split: one of the balanced splits (see compute_split_options),
+    # drawn at random for this participant. It says how many articles of each
+    # topic x outlet cell go to phase 1; which ones is random as well.
+    # Default: phase 1 = 20 articles (5 per outlet), phase 2 = 16 (4 per outlet).
+    counts = _rng.choice(data["split_options"])
     split = {"1": {t: [] for t in topics}, "2": {t: [] for t in topics}}
-    for t in topics:
-        for o in outlets:
-            uids = list(data["cells"][t][o])
-            _rng.shuffle(uids)
-            split["1"][t].append(uids[0])
-            split["2"][t].append(uids[1])
+    for (t, o), k in zip(data["split_cells"], counts):
+        uids = list(data["cells"][t][o])
+        _rng.shuffle(uids)
+        split["1"][t].extend(uids[:k])
+        split["2"][t].extend(uids[k:])
 
     # One feed per phase with all its articles; the order mixes topics and
     # outlets and is drawn independently for the two phases. The feed repeats
@@ -1386,7 +1505,8 @@ def start_study(data):
         "split": split, "article_order": order, "pages": pages, "page_idx": 0,
         "stage": "feed", "started_at": utc_iso(), "started_ts": time.time(),
     })
-    log(f"session {ss.session_id} started: condition {condition} ({method})")
+    log(f"session {ss.session_id} started: condition {condition} ({method}), "
+        f"{len(order['1'])} + {len(order['2'])} articles")
 
 
 def record_page(data, page, page_id, result, cards):
