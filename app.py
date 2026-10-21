@@ -44,6 +44,16 @@ LLM-rewritten text (from the `LLM_text` column).
 When the source is visible, the whole card (background + border) is coloured
 with the outlet's colour.
 
+Prolific integration:
+    - PROLIFIC_PID, STUDY_ID and SESSION_ID are read from the URL, so the
+      participant never types their ID. Without PROLIFIC_PID the study does
+      not start (REQUIRE_PROLIFIC_PID; DEV_MODE skips the check).
+    - A PROLIFIC_PID that already has a completed session in SHEET_SESSIONS
+      is blocked (BLOCK_DUPLICATE_PID).
+    - At the end the completion code is shown on screen, with a button that
+      returns to Prolific with the code already filled in. The code is read
+      from secrets ([prolific] completion_code), or PROLIFIC_COMPLETION_CODE.
+
 Run locally:     streamlit run app.py
 Documentation:   app_documentation.txt
 """
@@ -75,7 +85,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-20.1"
+APP_VERSION = "2026-10-21.1"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -157,10 +167,23 @@ CONDITIONS = {
 PENDING_WINDOW_MIN = 60
 
 WARN_ON_LEAVE = True       # browser asks for confirmation before leaving mid-study
-DEV_MODE = False           # True: ?condition=1..4 in the URL forces a condition
+DEV_MODE = False           # True: ?condition=1..4 in the URL forces a condition,
+                           # and the study starts even without PROLIFIC_PID
 
 ESTIMATED_MINUTES = "15–20"
 PROLIFIC_RETURN_URL = "https://app.prolific.com/submissions/complete?cc={code}"
+
+# Prolific ID read from the URL (?PROLIFIC_PID=...&STUDY_ID=...&SESSION_ID=...).
+# True: without PROLIFIC_PID the study does not start (DEV_MODE skips this check).
+REQUIRE_PROLIFIC_PID = True
+
+# True: a PROLIFIC_PID that already has a completed session in SHEET_SESSIONS
+# cannot take the study again.
+BLOCK_DUPLICATE_PID = True
+
+# Fallback completion code, used only when [prolific] completion_code is
+# missing from secrets.toml. Leave "" to rely on secrets only.
+PROLIFIC_COMPLETION_CODE = ""
 
 # New tab names (v3): the columns changed with the repeated feed, so the
 # data go to fresh tabs instead of being mixed with the v2 data.
@@ -659,6 +682,43 @@ def assign_condition(session_id, prolific_pid):
     except Exception as exc:
         log(f"Balanced assignment failed, using random: {exc}")
         return _rng.choice(list(CONDITIONS)), "random_storage_error"
+
+
+def pid_already_completed(prolific_pid):
+    """True if this PROLIFIC_PID already has a completed session, False if not,
+    None when the check could not be done (no storage or read error).
+
+    SHEET_SESSIONS gets a row only when a participant finishes the study, so
+    a match there means the study was already completed with this ID."""
+    pid = (prolific_pid or "").strip().lower()
+    if not pid:
+        return False
+    store = get_store()
+    if store is None:
+        return None
+    try:
+        rows = store.read(SHEET_SESSIONS, SESSION_HEADERS)
+    except Exception as exc:
+        log(f"Duplicate PID check failed: {exc}")
+        return None
+    return any(str(r.get("prolific_pid", "")).strip().lower() == pid for r in rows)
+
+
+def check_access():
+    """Decide once per session whether this participant may start.
+    Returns 'ok', 'ok_unchecked', 'missing_pid' or 'duplicate'."""
+    ss = st.session_state
+    if not ss.prolific_pid:
+        return "ok" if (DEV_MODE or not REQUIRE_PROLIFIC_PID) else "missing_pid"
+    if BLOCK_DUPLICATE_PID:
+        done = pid_already_completed(ss.prolific_pid)
+        if done:
+            log(f"Blocked duplicate PROLIFIC_PID {ss.prolific_pid}")
+            return "duplicate"
+        if done is None:
+            log(f"Duplicate check not possible for {ss.prolific_pid}: letting them in")
+            return "ok_unchecked"
+    return "ok"
 
 
 # =============================================================================
@@ -1429,9 +1489,12 @@ def init_session():
     st.session_state.update({
         "nps_ready": True,
         "session_id": make_session_id(),
-        "prolific_pid": qp.get("PROLIFIC_PID", ""),
-        "study_id": qp.get("STUDY_ID", ""),
-        "prolific_session_id": qp.get("SESSION_ID", ""),
+        # Read once from the URL (?PROLIFIC_PID=...&STUDY_ID=...&SESSION_ID=...)
+        # and kept in the session from here on.
+        "prolific_pid": qp.get("PROLIFIC_PID", "").strip(),
+        "study_id": qp.get("STUDY_ID", "").strip(),
+        "prolific_session_id": qp.get("SESSION_ID", "").strip(),
+        "pid_status": None,
         "user_agent": user_agent,
         "stage": "intro",
         "opened_at": utc_iso(),
@@ -1652,6 +1715,25 @@ def render_setup_error(errors):
 </section>""")
 
 
+def render_access_blocked(reason):
+    """Shown instead of the study when the participant did not come from
+    Prolific (no PROLIFIC_PID in the URL) or has already completed it."""
+    if reason == "missing_pid":
+        title = "Please open this study from Prolific"
+        text = ("This study can only be taken through Prolific. Please go back to "
+                "Prolific and open the study from the link on the study page.")
+    else:  # duplicate
+        title = "You have already taken part"
+        text = ("Our records show that this Prolific ID has already completed the study, "
+                "so it can't be taken again. If you think this is a mistake, please "
+                "contact the researcher through Prolific.")
+    st.html(f"""
+<section>
+  <h1 class="nps-title">{title}</h1>
+  <p class="nps-lead">{text}</p>
+</section>""")
+
+
 def render_intro(data):
     n_feeds = 2
     swatches = "".join(
@@ -1784,7 +1866,11 @@ def render_end():
         with st.spinner("Saving your responses…"):
             save_results()
 
-    code = str(get_secret("prolific", "completion_code", "") or "").strip()
+    # Completion code: from secrets ([prolific] completion_code), otherwise
+    # the PROLIFIC_COMPLETION_CODE fallback set at the top of the file.
+    code = str(get_secret("prolific", "completion_code", "") or PROLIFIC_COMPLETION_CODE).strip()
+    if not code:
+        log("WARNING: no Prolific completion code configured")
     failed = ss.save_status == "sheets_failed"
 
     if failed:
@@ -1826,7 +1912,18 @@ def main():
     if "nps_ready" not in st.session_state:
         init_session()
 
-    stage = st.session_state.stage
+    ss = st.session_state
+
+    # Prolific access check, done once per session: no PROLIFIC_PID in the
+    # URL, or a PROLIFIC_PID that already completed the study, stops here.
+    if ss.pid_status is None:
+        ss.pid_status = check_access()
+    if ss.pid_status in ("missing_pid", "duplicate"):
+        st.html("<style>#nps-feedbar { display: none !important; }</style>")
+        render_access_blocked(ss.pid_status)
+        return
+
+    stage = ss.stage
     if stage != "feed":
         # The Continue bar belongs to the feed only.
         st.html("<style>#nps-feedbar { display: none !important; }</style>")
