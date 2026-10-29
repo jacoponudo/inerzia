@@ -122,7 +122,7 @@ LOGO_FILES = {}
 # Logos larger than this trigger a warning in the log (they still work).
 LOGO_MAX_KB = 400
 # Logo height on the cards, in pixels (the width follows the image).
-LOGO_HEIGHT_PX = 26
+LOGO_HEIGHT_PX = 40
 
 # CSV column names. For each field the app uses the first name it finds.
 # Edit these lists if your CSV uses different names.
@@ -888,9 +888,9 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   .card { position: relative; background: var(--surface); border: 1px solid var(--line);
           border-radius: 12px; padding: 22px 26px 18px; }
   /* Source visible: the outlet logo sits at the top of the card. */
-  .source { display: flex; align-items: center; height: var(--logo-h, 26px);
-            margin: -4px 0 14px; padding: 0; }
-  .source img { display: block; height: 100%; width: auto; max-width: 200px;
+  .source { display: flex; align-items: center; height: var(--logo-h, 40px);
+            margin: -4px 0 16px; padding: 0; }
+  .source img { display: block; height: 100%; width: auto; max-width: 300px;
                 object-fit: contain; object-position: left center; }
 
   .headline { font-family: var(--sans); font-weight: 600; font-size: 21px; line-height: 1.28;
@@ -937,7 +937,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   @media (max-width: 560px) {
     .card { padding: 18px 18px 16px; }
-    .source img { max-width: 160px; }
+    .source img { max-width: 220px; }
     .headline { font-size: 19px; }
     .body { font-size: 16.5px; }
     .actions { align-items: stretch; }
@@ -1484,7 +1484,7 @@ iframe { border: 0 !important; }
 }
 ul.nps-rows { list-style: none !important; margin: 0 0 30px !important; padding: 0 !important;
               display: grid; gap: 20px; }
-li.nps-row { display: grid; grid-template-columns: 150px 1fr; gap: 22px; align-items: center;
+li.nps-row { display: grid; grid-template-columns: 180px 1fr; gap: 22px; align-items: center;
              margin: 0 !important; padding: 0 !important; }
 li.nps-row::marker { content: none; }
 .nps-row p { margin: 0; font-size: 16px; line-height: 1.55; color: var(--ink-2); }
@@ -1492,7 +1492,7 @@ li.nps-row::marker { content: none; }
 .nps-token { display: flex; align-items: center; justify-content: flex-start; }
 .tok-logos { display: grid !important; grid-template-columns: repeat(2, auto);
              gap: 8px 12px; justify-content: start; align-items: center; }
-.tok-logos img { display: block; height: 18px; width: auto; max-width: 68px; object-fit: contain; }
+.tok-logos img { display: block; height: 28px; width: auto; max-width: 84px; object-fit: contain; }
 .tok-more {
   font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: underline;
   text-decoration-thickness: 1.5px; text-decoration-color: var(--line-strong);
