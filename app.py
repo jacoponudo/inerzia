@@ -2,25 +2,32 @@
 News Perception Study
 =====================
 
-Streamlit app for the two-phase news-feed experiment.
+Streamlit app for the news-feed experiment: a practice feed, then two feeds.
 
-    Phase 1 (feed 1): every participant sees the source colour and the
-                      original text.
-    Phase 2 (feed 2): the between-subject treatment (2 x 2):
-                      source visible / hidden  x  original / LLM-rewritten.
+    Phase 0 (practice):  4 articles, one per outlet. Every participant sees
+                         the outlet logo and the original text. It only lets
+                         participants learn the interface.
+    Phase 1 (feed 1):    every participant sees the outlet logo and the
+                         original text.
+    Phase 2 (feed 2):    the between-subject treatment (2 x 2):
+                         source visible / hidden  x  original / LLM-rewritten.
 
-The article set has 3 topics x 4 outlets x 3 articles = 36 articles.
-Phase 1 shows PHASE1_ARTICLES of them (default 20, i.e. 5 per outlet) and
-phase 2 the remaining 16 (4 per outlet). For each participant the split is
-drawn at random among all the splits that keep phase 1 balanced by outlet,
-topic, reliability class and topic x reliability class (see
+The article set has 3 topics x 4 outlets x 3 articles = 36 articles:
+PHASE0_ARTICLES (4) in phase 0, PHASE1_ARTICLES (16) in phase 1 and the
+remaining 16 in phase 2. Every phase is balanced by outlet, topic,
+reliability class and topic x reliability class: phase 0 has exactly one
+article per outlet (two reliable, two unreliable, never two of the same
+class on one topic); phases 1 and 2 have 4 articles per outlet each and
+split the rest as evenly as possible. For each participant the split is
+drawn at random among all the balanced ones (see balanced_counts and
 compute_split_options); within each topic x outlet cell, which articles go
 to which phase is random too.
 
 Each phase is ONE scrolling feed with all its articles, in an order
 randomised independently for each phase and each participant. So that the
 feed never seems to end, the same sequence is repeated REPEAT_ROUNDS times
-(default 10) one after the other.
+(default 10) in phases 1 and 2; the practice feed shows its 4 articles
+PHASE0_REPEAT_ROUNDS times (default once).
 
 The state of an article is shared by all its copies: if the participant
 opens it ("Read more" / "Read full article") or likes it on one copy, every
@@ -32,17 +39,22 @@ Interaction per article:
 
 The "Continue" / "Finish" button sits in a bar fixed at the bottom of the
 screen (always reachable, however far the participant scrolls). It unlocks
-only after MIN_FEED_SECONDS (default 2 minutes), but the countdown appears
-on it only during the last COUNTDOWN_VISIBLE_SECONDS, so the feed never
-looks like a timed task. Between the two feeds a "loading the second feed"
-wait (BREAK_LOADING_SECONDS) runs before the participant can go on.
+only after MIN_FEED_SECONDS (default 2 minutes; PHASE0_MIN_SECONDS for the
+practice feed), but the countdown appears on it only during the last
+COUNTDOWN_VISIBLE_SECONDS, so the feed never looks like a timed task.
+Between two feeds a "loading the next feed" wait (BREAK_LOADING_SECONDS)
+runs before the participant can go on.
 
 Each card shows the headline that goes with the text version it displays:
 the `Title` column with the original text, the `LLM_title` column with the
 LLM-rewritten text (from the `LLM_text` column).
 
-When the source is visible, the whole card (background + border) is coloured
-with the outlet's colour.
+Outlet logos: when the source is visible, each card shows the logo of its
+outlet at the top. The logos are image files in data/logos/, one per
+outlet, named after the outlet as written in the CSV `domain` column
+(e.g. data/logos/nytimes.com.png). PNG, SVG, JPG and WEBP are accepted.
+If a logo is missing, the app shows the exact file names it expects.
+LOGO_FILES can map an outlet to a different file name.
 
 Prolific integration:
     - PROLIFIC_PID, STUDY_ID and SESSION_ID are read from the URL, so the
@@ -67,6 +79,7 @@ import os
 import random
 import re
 import string
+import base64
 import tempfile
 import threading
 import time
@@ -85,7 +98,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-21.1"
+APP_VERSION = "2026-10-29.1"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -95,6 +108,21 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 ARTICLES_CSV = os.path.join(DATA_DIR, "articoli_selezionati - articoli scelti.csv")
 LOCAL_BACKUP_DIR = os.path.join(DATA_DIR, "responses")
+
+# Outlet logos: one image per outlet in this folder, named after the outlet
+# exactly as written in the CSV `domain` column, e.g. "nytimes.com.png".
+# Matching ignores upper/lower case and a leading "www."; spaces and other
+# symbols may also be written as "_" or "-". If a logo is missing, the app
+# lists the file names it expects.
+LOGO_DIR = os.path.join(DATA_DIR, "logos")
+LOGO_EXTENSIONS = (".png", ".svg", ".webp", ".jpg", ".jpeg")
+# Optional: outlet -> file name inside LOGO_DIR, when a file can't be named
+# after the outlet. Example: {"www.nytimes.com": "nyt.png"}
+LOGO_FILES = {}
+# Logos larger than this trigger a warning in the log (they still work).
+LOGO_MAX_KB = 400
+# Logo height on the cards, in pixels (the width follows the image).
+LOGO_HEIGHT_PX = 26
 
 # CSV column names. For each field the app uses the first name it finds.
 # Edit these lists if your CSV uses different names.
@@ -117,9 +145,11 @@ REQUIRED_FIELDS = ("topic", "outlet", "title", "title_rewritten", "text", "text_
 
 ARTICLES_PER_CELL = 3      # articles per outlet per topic (3 topics x 4 outlets x 3 = 36)
 
-# Length of phase 1; phase 2 gets all the other articles (36 - 20 = 16).
-# With 4 outlets: 5 per outlet in phase 1, 4 per outlet in phase 2.
-PHASE1_ARTICLES = 20
+# Phase lengths. Phase 0 (practice) has PHASE0_ARTICLES, phase 1 has
+# PHASE1_ARTICLES and phase 2 all the others: 4 + 16 + 16 = 36.
+# With 4 outlets: 1 per outlet in phase 0, 4 per outlet in phases 1 and 2.
+PHASE0_ARTICLES = 4
+PHASE1_ARTICLES = 16
 
 # Safety limit on how many candidate splits are checked at start-up.
 MAX_SPLIT_COMBOS = 2 ** 16
@@ -130,13 +160,15 @@ PREVIEW_CHARS = 144         # visible before "Read more"
 READMORE_CHARS = 500       # visible after "Read more" (total)
 
 # How many times the article sequence of a feed is repeated, one after the
-# other, so that the feed never seems to end (20 articles x 10 = 200 cards
-# in feed 1, 16 x 10 = 160 in feed 2).
+# other, so that the feed never seems to end (16 articles x 10 = 160 cards
+# in feeds 1 and 2). The practice feed has its own setting.
 REPEAT_ROUNDS = 10
+PHASE0_REPEAT_ROUNDS = 1
 
 # Minimum time on each feed before "Continue" / "Finish" can be clicked.
 # Set to 0 to disable (e.g. while testing).
 MIN_FEED_SECONDS = 120
+PHASE0_MIN_SECONDS = 30
 
 # How long before the unlock the countdown becomes visible on the button.
 # Until then the button just reads "Continue" / "Finish" (greyed out), so
@@ -144,16 +176,9 @@ MIN_FEED_SECONDS = 120
 # Set to 0 to never show the countdown.
 COUNTDOWN_VISIBLE_SECONDS = 10
 
-# Wait between the two feeds: how long the "loading the second feed" screen
-# lasts before the participant can start feed 2.
+# Wait between two feeds: how long the "loading the next feed" screen
+# lasts before the participant can go on.
 BREAK_LOADING_SECONDS = 10
-
-# Card tint strength when the source is visible: 0 = white, 1 = full colour.
-CARD_TINT = 0.16
-
-# Okabe-Ito colours, chosen to stay distinguishable with colour-vision
-# deficiencies. Shuffled and assigned to the outlets for each participant.
-OUTLET_PALETTE = ["#0072B2", "#E69F00", "#009E73", "#CC79A7"]
 
 CONDITIONS = {
     1: {"label": "source visible / original text", "source_visible": True, "rewritten": False},
@@ -185,28 +210,28 @@ BLOCK_DUPLICATE_PID = True
 # missing from secrets.toml. Leave "" to rely on secrets only.
 PROLIFIC_COMPLETION_CODE = ""
 
-# New tab names (v3): the columns changed with the repeated feed, so the
-# data go to fresh tabs instead of being mixed with the v2 data.
-SHEET_ASSIGNMENTS = "assignments_v3"
-SHEET_SESSIONS = "sessions_v3"
-SHEET_RESPONSES = "responses_v3"
+# New tab names (v4): the columns changed with the practice phase and the
+# logos, so the data go to fresh tabs instead of being mixed with v3 data.
+SHEET_ASSIGNMENTS = "assignments_v4"
+SHEET_SESSIONS = "sessions_v4"
+SHEET_RESPONSES = "responses_v4"
 
 ASSIGNMENT_HEADERS = ["session_id", "prolific_pid", "condition", "assigned_at_utc"]
 
 SESSION_HEADERS = [
     "session_id", "prolific_pid", "study_id", "prolific_session_id",
     "condition", "condition_label", "assignment_method",
-    "color_map", "phase1_order", "phase2_order", "article_split",
+    "logo_files", "phase0_order", "phase1_order", "phase2_order", "article_split",
     "opened_at_utc", "started_at_utc", "completed_at_utc",
     "duration_min", "n_articles", "n_readmore", "n_full", "n_likes",
-    "phase1_max_round", "phase2_max_round",
+    "phase0_max_round", "phase1_max_round", "phase2_max_round",
     "user_agent", "app_version",
 ]
 
 RESPONSE_HEADERS = [
     "session_id", "prolific_pid", "condition", "condition_label",
     "phase", "page_number", "topic", "position",
-    "article_uid", "outlet", "reliability_class", "outlet_color",
+    "article_uid", "outlet", "reliability_class", "logo_file",
     "source_visible", "text_version", "title_shown", "n_sentences", "n_chars",
     "readmore_available", "readmore_clicked", "readmore_ms", "readmore_ts", "readmore_round",
     "full_available", "full_clicked", "full_ms", "full_ts", "full_round",
@@ -272,14 +297,6 @@ def number_word(n):
              "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
              "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty"]
     return words[n] if 0 <= n < len(words) else str(n)
-
-
-def tint_hex(hex_color, alpha):
-    """Opaque mix of `hex_color` with white (same formula as in the feed)."""
-    h = hex_color.lstrip("#")
-    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
-    mix = lambda c: round(255 - (255 - c) * alpha)
-    return f"rgb({mix(r)}, {mix(g)}, {mix(b)})"
 
 
 def log(message):
@@ -366,39 +383,78 @@ def _near(x):
     return sorted({math.floor(x), math.ceil(x)})
 
 
-def compute_split_options(articles, cells, topics, outlets, phase1_n):
-    """All the admissible ways to split the articles between the two phases.
+def balanced_counts(keys, sizes, outlet_class, n):
+    """All the ways to take `n` articles from the cells so that the selection
+    is balanced.
 
-    A split says, for each topic x outlet cell, how many of its articles go
-    to phase 1 (the rest go to phase 2). A split is admissible when:
-      - phase 1 has exactly `phase1_n` articles;
-      - every outlet, every topic, every reliability class and every
-        topic x reliability class gets its proportional share of phase 1
-        (share = phase1_n / total), rounded down or up.
+    `keys` lists the cells as (topic, outlet) and `sizes` how many articles
+    each cell still has. A selection says how many articles to take from each
+    cell; it is admissible when it has exactly `n` articles and every outlet,
+    topic, reliability class and topic x reliability class gets its
+    proportional share (share = n / total), rounded down or up. Each cell
+    also gets its own share, rounded down or up.
 
-    With 36 articles (3 per cell) and phase1_n = 20 this means, in phase 1:
-    5 articles per outlet; 7, 7 and 6 per topic; 10 reliable and 10
-    unreliable; 3 or 4 reliable and 3 or 4 unreliable per topic.
+    `outlet_class` maps outlet -> reliability class, or is None when the
+    reliability classes can't be balanced. Returns (options, error)."""
+    total = sum(sizes)
+    if not 0 < n <= total:
+        return [], f"Cannot take {n} articles out of {total}."
 
-    Returns (cell_keys, options, error): `cell_keys` lists the cells as
-    (topic, outlet); each option is a tuple with one phase-1 count per cell.
-    """
-    total = len(articles)
-    if not 0 < phase1_n < total:
-        return [], [], (f"PHASE1_ARTICLES must be between 1 and {total - 1} "
-                        f"(found {phase1_n}).")
-
-    share = Fraction(phase1_n, total)
-    keys = [(t, o) for t in topics for o in outlets]
-    sizes = [len(cells[t][o]) for t, o in keys]
-    choices = [_near(n * share) for n in sizes]
+    share = Fraction(n, total)
+    choices = [[c for c in _near(size * share) if 0 <= c <= size] for size in sizes]
 
     n_combos = 1
     for c in choices:
         n_combos *= len(c)
     if n_combos > MAX_SPLIT_COMBOS:
-        return [], [], (f"Too many candidate splits to check ({n_combos}); "
-                        f"raise MAX_SPLIT_COMBOS or use fewer cells.")
+        return [], (f"Too many candidate splits to check ({n_combos}); "
+                    f"raise MAX_SPLIT_COMBOS or use fewer cells.")
+
+    groups = {}
+    for i, (t, o) in enumerate(keys):
+        groups.setdefault(("outlet", o), []).append(i)
+        groups.setdefault(("topic", t), []).append(i)
+        if outlet_class:
+            groups.setdefault(("reliability", outlet_class[o]), []).append(i)
+            groups.setdefault(("topic x reliability", t, outlet_class[o]), []).append(i)
+    limits = [(idx, set(_near(sum(sizes[i] for i in idx) * share)))
+              for idx in groups.values()]
+
+    options = []
+    for combo in itertools.product(*choices):
+        if sum(combo) != n:
+            continue
+        if all(sum(combo[i] for i in idx) in allowed for idx, allowed in limits):
+            options.append(tuple(combo))
+    if not options:
+        return [], (f"No balanced way to take {n} of {total} articles while keeping "
+                    f"outlets, topics and reliability classes balanced.")
+    return options, None
+
+
+def compute_split_options(articles, cells, topics, outlets, phase0_n, phase1_n):
+    """All the admissible ways to split the articles among the three phases.
+
+    Step 1, phase 0: `phase0_n` articles taken from the whole set, balanced
+    (see balanced_counts). With 36 articles and phase0_n = 4: one article per
+    outlet; topics 2, 1, 1; two reliable and two unreliable; at most one
+    reliable and one unreliable per topic.
+
+    Step 2, phase 1: `phase1_n` articles taken, balanced, from what phase 0
+    left; phase 2 gets the rest. With phase1_n = 16: 4 per outlet in each of
+    phases 1 and 2, 8 reliable and 8 unreliable, topics split as evenly as
+    possible (e.g. 5/6 per topic) and the same for topic x reliability.
+
+    Returns (cell_keys, options, error). `cell_keys` lists the cells as
+    (topic, outlet); each option is a pair (phase0_counts, phase1_counts),
+    with one count per cell. Phase 2 gets size - phase0 - phase1 per cell."""
+    total = len(articles)
+    if not (0 < phase0_n and 0 < phase1_n and phase0_n + phase1_n < total):
+        return [], [], (f"PHASE0_ARTICLES + PHASE1_ARTICLES must be less than {total} "
+                        f"(found {phase0_n} + {phase1_n}).")
+
+    keys = [(t, o) for t in topics for o in outlets]
+    sizes = [len(cells[t][o]) for t, o in keys]
 
     # Reliability is balanced only when each outlet has a single known class
     # and there are at least two classes.
@@ -408,29 +464,96 @@ def compute_split_options(articles, cells, topics, outlets, phase1_n):
         outlet_class[o] = next(iter(classes)) if len(classes) == 1 else None
     use_reliability = (all(c not in (None, "NA") for c in outlet_class.values())
                        and len(set(outlet_class.values())) > 1)
+    oc = outlet_class if use_reliability else None
 
-    groups = {}
-    for i, (t, o) in enumerate(keys):
-        groups.setdefault(("outlet", o), []).append(i)
-        groups.setdefault(("topic", t), []).append(i)
-        if use_reliability:
-            groups.setdefault(("reliability", outlet_class[o]), []).append(i)
-            groups.setdefault(("topic x reliability", t, outlet_class[o]), []).append(i)
-    limits = [(idx, set(_near(sum(sizes[i] for i in idx) * share)))
-              for idx in groups.values()]
+    phase0_options, error = balanced_counts(keys, sizes, oc, phase0_n)
+    if error:
+        return keys, [], f"Phase 0: {error} Change PHASE0_ARTICLES or the article set."
 
     options = []
-    for combo in itertools.product(*choices):
-        if sum(combo) != phase1_n:
-            continue
-        if all(sum(combo[i] for i in idx) in allowed for idx, allowed in limits):
-            options.append(tuple(combo))
+    for p0 in phase0_options:
+        rest = [size - k for size, k in zip(sizes, p0)]
+        phase1_options, _ = balanced_counts(keys, rest, oc, phase1_n)
+        options.extend((p0, p1) for p1 in phase1_options)
 
     if not options:
-        return keys, [], (f"No split puts {phase1_n} articles in phase 1 while keeping "
-                          f"outlets, topics and reliability classes balanced. "
-                          f"Change PHASE1_ARTICLES or the article set.")
+        return keys, [], (f"No split puts {phase0_n} articles in phase 0 and {phase1_n} "
+                          f"in phase 1 while keeping outlets, topics and reliability "
+                          f"classes balanced. Change PHASE0_ARTICLES / PHASE1_ARTICLES "
+                          f"or the article set.")
     return keys, options, None
+
+
+# ---- outlet logos -----------------------------------------------------------
+
+_LOGO_MIME = {".png": "image/png", ".svg": "image/svg+xml", ".webp": "image/webp",
+              ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+
+
+def _logo_key(name):
+    """Normalised name used to match a logo file to an outlet: lower case,
+    no leading "www.", and every run of symbols turned into "_"."""
+    name = str(name).strip().lower()
+    if name.startswith("www."):
+        name = name[4:]
+    return re.sub(r"[^a-z0-9.]+", "_", name).strip("_")
+
+
+def _logo_index():
+    """Signature of the logo folder (names, sizes, mtimes), used as cache key."""
+    if not os.path.isdir(LOGO_DIR):
+        return ()
+    out = []
+    for f in sorted(os.listdir(LOGO_DIR)):
+        path = os.path.join(LOGO_DIR, f)
+        if os.path.isfile(path):
+            st_ = os.stat(path)
+            out.append((f, st_.st_size, st_.st_mtime))
+    return tuple(out)
+
+
+@st.cache_data(show_spinner=False)
+def load_logos(outlets, index):
+    """Find and read the logo of each outlet.
+
+    Returns (logos, missing): logos maps outlet -> {"file", "src"}, where src
+    is a data: URI; missing lists the outlets with no logo file.
+    `index` (see _logo_index) is part of the cache key, so adding or
+    replacing a logo reloads it."""
+    files = {}
+    for f, _, _ in index:
+        stem, ext = os.path.splitext(f)
+        if ext.lower() in LOGO_EXTENSIONS:
+            files.setdefault(_logo_key(stem), f)
+    names = {f for f, _, _ in index}
+
+    logos, missing = {}, []
+    for o in outlets:
+        f = LOGO_FILES.get(o)
+        if f and f not in names:
+            log(f"WARNING: LOGO_FILES['{o}'] = '{f}' not found in {LOGO_DIR}")
+            f = None
+        if not f:
+            # "nytimes.com" matches nytimes.com.png and also nytimes.png
+            key = _logo_key(o)
+            f = files.get(key) or files.get(key.rsplit(".", 1)[0])
+        if not f:
+            missing.append(o)
+            continue
+        path = os.path.join(LOGO_DIR, f)
+        with open(path, "rb") as fh:
+            raw = fh.read()
+        if len(raw) > LOGO_MAX_KB * 1024:
+            log(f"WARNING: logo {f} is {len(raw) // 1024} KB; a smaller file loads faster.")
+        mime = _LOGO_MIME[os.path.splitext(f)[1].lower()]
+        logos[o] = {"file": f,
+                    "src": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"}
+    return logos, missing
+
+
+def logo_hint(outlet):
+    """Expected logo file name for an outlet, for error messages."""
+    return f"{_logo_key(outlet)}.png"
 
 
 @st.cache_data(show_spinner=False)
@@ -504,10 +627,6 @@ def load_study_data(csv_path, mtime):
     topics = sorted({a["topic"] for a in articles.values()})
     outlets = sorted({a["outlet"] for a in articles.values()})
 
-    if len(outlets) > len(OUTLET_PALETTE):
-        errors.append(f"Found {len(outlets)} outlets but the palette has only "
-                      f"{len(OUTLET_PALETTE)} colours.")
-
     cells = {t: {o: [] for o in outlets} for t in topics}
     for a in articles.values():
         cells[a["topic"]][a["outlet"]].append(a["uid"])
@@ -554,12 +673,13 @@ def load_study_data(csv_path, mtime):
     split_cells, split_options = [], []
     if not errors:
         split_cells, split_options, split_error = compute_split_options(
-            articles, cells, topics, outlets, PHASE1_ARTICLES)
+            articles, cells, topics, outlets, PHASE0_ARTICLES, PHASE1_ARTICLES)
         if split_error:
             errors.append(split_error)
         else:
+            n2 = len(articles) - PHASE0_ARTICLES - PHASE1_ARTICLES
             log(f"{len(split_options)} balanced phase splits available "
-                f"({PHASE1_ARTICLES} + {len(articles) - PHASE1_ARTICLES} articles).")
+                f"({PHASE0_ARTICLES} + {PHASE1_ARTICLES} + {n2} articles).")
 
     for w in warnings:
         log(f"WARNING: {w}")
@@ -767,10 +887,11 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   .feed { display: flex; flex-direction: column; gap: 14px; }
   .card { position: relative; background: var(--surface); border: 1px solid var(--line);
           border-radius: 12px; padding: 22px 26px 18px; }
-  /* Source visible: the card is tinted with the outlet colour (set inline). */
-  .card.sourced { border-width: 2px; padding: 21px 25px 17px; padding-top: 46px; }
-  .ribbon { position: absolute; top: -1px; left: 25px; width: 18px; height: 28px;
-            clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 74%, 0 100%); }
+  /* Source visible: the outlet logo sits at the top of the card. */
+  .source { display: flex; align-items: center; height: var(--logo-h, 26px);
+            margin: -4px 0 14px; padding: 0; }
+  .source img { display: block; height: 100%; width: auto; max-width: 200px;
+                object-fit: contain; object-position: left center; }
 
   .headline { font-family: var(--sans); font-weight: 600; font-size: 21px; line-height: 1.28;
               letter-spacing: -0.012em; margin: 0 0 10px; color: var(--ink); text-wrap: pretty; }
@@ -816,8 +937,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   @media (max-width: 560px) {
     .card { padding: 18px 18px 16px; }
-    .card.sourced { padding: 17px 17px 15px; padding-top: 42px; }
-    .ribbon { left: 17px; }
+    .source img { max-width: 160px; }
     .headline { font-size: 19px; }
     .body { font-size: 16.5px; }
     .actions { align-items: stretch; }
@@ -869,15 +989,23 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   function ms() { return Math.round(performance.now() - state.t0); }
   function iso() { return new Date().toISOString(); }
 
-  // Opaque mix of a hex colour with white (alpha 0 = white, 1 = full colour).
-  function tint(hex, alpha) {
-    var h = String(hex).replace("#", "");
-    if (h.length === 3) h = h.charAt(0) + h.charAt(0) + h.charAt(1) + h.charAt(1) + h.charAt(2) + h.charAt(2);
-    var n = parseInt(h, 16);
-    var rgb = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(function (c) {
-      return Math.round(255 - (255 - c) * alpha);
-    });
-    return "rgb(" + rgb.join(", ") + ")";
+  // Logos arrive as data: URIs; each becomes one blob URL, shared by all
+  // the cards of that outlet (no copy of the image per card).
+  function logoUrls(map) {
+    var out = {};
+    for (var key in (map || {})) {
+      var src = map[key].src, url = src;
+      try {
+        var comma = src.indexOf(",");
+        var mime = src.slice(5, src.indexOf(";"));
+        var bin = atob(src.slice(comma + 1));
+        var bytes = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        url = URL.createObjectURL(new Blob([bytes], { type: mime }));
+      } catch (err) { url = src; }
+      out[key] = { url: url, alt: map[key].alt || "" };
+    }
+    return out;
   }
 
   // ---- parent page (same origin as the Streamlit app) --------------------
@@ -1071,14 +1199,17 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   function buildCard(a, round) {
     var card = el("article", "card");
-    if (a.color) {
+    var logo = a.logo ? state.logos[a.logo] : null;
+    if (logo) {
       card.classList.add("sourced");
-      card.style.background = tint(a.color, state.tintAlpha);
-      card.style.borderColor = a.color;
-      var ribbon = el("div", "ribbon");
-      ribbon.style.background = a.color;
-      ribbon.setAttribute("aria-hidden", "true");
-      card.appendChild(ribbon);
+      var src = el("div", "source");
+      var img = el("img");
+      img.src = logo.url;
+      img.alt = logo.alt;
+      img.decoding = "async";
+      img.draggable = false;
+      src.appendChild(img);
+      card.appendChild(src);
     }
     if (a.title) card.appendChild(el("h2", "headline", a.title));
     var inst = { round: round, card: card, bodyEl: el("div", "body") };
@@ -1138,16 +1269,20 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   // ---- page --------------------------------------------------------------
   function buildPage(args) {
     if (viewObserver) { viewObserver.disconnect(); viewObserver = null; }
+    if (state && state.logos) {
+      for (var k in state.logos) { try { URL.revokeObjectURL(state.logos[k].url); } catch (e) {} }
+    }
     state = {
       t0: performance.now(), enterTs: iso(), submitted: false, isLast: !!args.is_last,
       previewChars: args.preview_chars || 50, readmoreChars: args.readmore_chars || 144,
-      tintAlpha: (typeof args.card_tint === "number") ? args.card_tint : 0.16,
+      logos: logoUrls(args.logos),
       minMs: Math.max(0, (args.min_seconds || 0) * 1000),
       revealMs: Math.max(0, (args.countdown_visible_seconds || 0) * 1000),
       nudgeUntil: 0, hintEl: null,
       rounds: Math.max(1, args.repeat_rounds || 1), maxRound: 0, articles: []
     };
     root.textContent = "";
+    if (args.logo_height) root.style.setProperty("--logo-h", args.logo_height + "px");
 
     // Furthest round the participant scrolled to (a card at least half visible).
     if (window.IntersectionObserver) {
@@ -1162,7 +1297,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     }
 
     var head = el("div", "progress");
-    head.appendChild(el("span", "progress-label", "Feed " + args.page_number + " of " + args.total_pages));
+    head.appendChild(el("span", "progress-label", args.progress_label || ""));
     var track = el("div", "track");
     track.setAttribute("role", "progressbar");
     track.setAttribute("aria-valuemin", "0");
@@ -1198,7 +1333,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     state.articles = (args.articles || []).map(function (art, i) {
       var sentences = art.sentences || [];
       var a = {
-        uid: String(art.uid), position: i + 1, color: art.color || null, title: art.title || "",
+        uid: String(art.uid), position: i + 1, logo: art.logo || null, title: art.title || "",
         sentences: sentences, flat: flatten(sentences),
         stage: 0, readmore_ms: null, readmore_ts: null, readmore_round: null,
         full_ms: null, full_ts: null, full_round: null,
@@ -1355,10 +1490,9 @@ li.nps-row::marker { content: none; }
 .nps-row p { margin: 0; font-size: 16px; line-height: 1.55; color: var(--ink-2); }
 .nps-row b { color: var(--ink); font-weight: 600; }
 .nps-token { display: flex; align-items: center; justify-content: flex-start; }
-.tok-swatches { gap: 8px; }
-.tok-swatches span {
-  display: block; width: 26px; height: 20px; border-radius: 5px; border: 2px solid;
-}
+.tok-logos { display: grid !important; grid-template-columns: repeat(2, auto);
+             gap: 8px 12px; justify-content: start; align-items: center; }
+.tok-logos img { display: block; height: 18px; width: auto; max-width: 68px; object-fit: contain; }
 .tok-more {
   font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: underline;
   text-decoration-thickness: 1.5px; text-decoration-color: var(--line-strong);
@@ -1503,7 +1637,7 @@ def init_session():
         "completed_at": None,
         "condition": None,
         "assignment_method": None,
-        "color_map": {},
+        "logo_files": {},
         "article_order": {},
         "split": {},
         "pages": [],
@@ -1518,31 +1652,29 @@ def init_session():
 
 
 def start_study(data):
-    """Randomise everything for this participant and build the two feeds."""
+    """Randomise everything for this participant and build the three feeds."""
     ss = st.session_state
     topics, outlets = list(data["topics"]), list(data["outlets"])
 
-    colors = OUTLET_PALETTE[: len(outlets)]
-    _rng.shuffle(colors)
-    color_map = dict(zip(outlets, colors))
-
     # Phase split: one of the balanced splits (see compute_split_options),
     # drawn at random for this participant. It says how many articles of each
-    # topic x outlet cell go to phase 1; which ones is random as well.
-    # Default: phase 1 = 20 articles (5 per outlet), phase 2 = 16 (4 per outlet).
-    counts = _rng.choice(data["split_options"])
-    split = {"1": {t: [] for t in topics}, "2": {t: [] for t in topics}}
-    for (t, o), k in zip(data["split_cells"], counts):
+    # topic x outlet cell go to phases 0 and 1 (phase 2 gets the rest); which
+    # ones is random as well.
+    # Default: phase 0 = 4 articles (1 per outlet), phases 1 and 2 = 16 each
+    # (4 per outlet).
+    counts0, counts1 = _rng.choice(data["split_options"])
+    split = {ph: {t: [] for t in topics} for ph in ("0", "1", "2")}
+    for (t, o), k0, k1 in zip(data["split_cells"], counts0, counts1):
         uids = list(data["cells"][t][o])
         _rng.shuffle(uids)
-        split["1"][t].extend(uids[:k])
-        split["2"][t].extend(uids[k:])
+        split["0"][t].extend(uids[:k0])
+        split["1"][t].extend(uids[k0:k0 + k1])
+        split["2"][t].extend(uids[k0 + k1:])
 
     # One feed per phase with all its articles; the order mixes topics and
-    # outlets and is drawn independently for the two phases. The feed repeats
-    # this same order REPEAT_ROUNDS times.
+    # outlets and is drawn independently for each phase.
     order = {}
-    for phase in ("1", "2"):
+    for phase in ("0", "1", "2"):
         uids = [u for t in topics for u in split[phase][t]]
         _rng.shuffle(uids)
         order[phase] = uids
@@ -1551,8 +1683,8 @@ def start_study(data):
     cond = CONDITIONS[condition]
 
     pages = []
-    for number, phase in enumerate(("1", "2"), start=1):
-        if phase == "1":
+    for number, phase in enumerate(("0", "1", "2"), start=1):
+        if phase in ("0", "1"):
             visible, version = True, "original"
         else:
             visible = cond["source_visible"]
@@ -1561,15 +1693,19 @@ def start_study(data):
             "page_number": number, "phase": int(phase),
             "source_visible": visible, "text_version": version,
             "articles": order[phase],
+            "repeat_rounds": PHASE0_REPEAT_ROUNDS if phase == "0" else REPEAT_ROUNDS,
+            "min_seconds": PHASE0_MIN_SECONDS if phase == "0" else MIN_FEED_SECONDS,
         })
 
+    logo_files = {o: data["logos"][o]["file"] for o in outlets}
+
     ss.update({
-        "condition": condition, "assignment_method": method, "color_map": color_map,
+        "condition": condition, "assignment_method": method, "logo_files": logo_files,
         "split": split, "article_order": order, "pages": pages, "page_idx": 0,
         "stage": "feed", "started_at": utc_iso(), "started_ts": time.time(),
     })
     log(f"session {ss.session_id} started: condition {condition} ({method}), "
-        f"{len(order['1'])} + {len(order['2'])} articles")
+        f"{len(order['0'])} + {len(order['1'])} + {len(order['2'])} articles")
 
 
 def record_page(data, page, page_id, result, cards):
@@ -1594,7 +1730,7 @@ def record_page(data, page, page_id, result, cards):
             "article_uid": uid,
             "outlet": art["outlet"],
             "reliability_class": art["reliability"],
-            "outlet_color": ss.color_map.get(art["outlet"]),
+            "logo_file": ss.logo_files.get(art["outlet"]) if page["source_visible"] else None,
             "source_visible": page["source_visible"],
             "text_version": page["text_version"],
             "title_shown": shown[uid]["title"],
@@ -1642,7 +1778,8 @@ def build_session_row():
         "condition": ss.condition,
         "condition_label": CONDITIONS[ss.condition]["label"],
         "assignment_method": ss.assignment_method,
-        "color_map": json.dumps(ss.color_map),
+        "logo_files": json.dumps(ss.logo_files),
+        "phase0_order": json.dumps(ss.article_order.get("0", [])),
         "phase1_order": json.dumps(ss.article_order.get("1", [])),
         "phase2_order": json.dumps(ss.article_order.get("2", [])),
         "article_split": json.dumps(ss.split),
@@ -1654,6 +1791,7 @@ def build_session_row():
         "n_readmore": sum(1 for r in resp if r["readmore_clicked"]),
         "n_full": sum(1 for r in resp if r["full_clicked"]),
         "n_likes": sum(1 for r in resp if r["liked_final"]),
+        "phase0_max_round": max_round(0),
         "phase1_max_round": max_round(1),
         "phase2_max_round": max_round(2),
         "user_agent": ss.user_agent,
@@ -1736,9 +1874,8 @@ def render_access_blocked(reason):
 
 def render_intro(data):
     n_feeds = 2
-    swatches = "".join(
-        f'<span style="background:{tint_hex(c, CARD_TINT)};border-color:{c}"></span>'
-        for c in OUTLET_PALETTE[: len(data["outlets"])]
+    logos = "".join(
+        f'<img src="{data["logos"][o]["src"]}" alt="">' for o in data["outlets"]
     )
     if MIN_FEED_SECONDS > 0:
         wait_note = (" It becomes active once you've spent a little time on the feed, "
@@ -1748,7 +1885,7 @@ def render_intro(data):
     st.html(f"""
 <section class="nps-intro">
   <h1 class="nps-title">News Perception Study</h1>
-  <p class="nps-lead">You're about to browse {number_word(n_feeds)} news feeds, one after the other. Each one is a stream of real news articles from different outlets, and you can scroll through it for as long as you like.</p>
+  <p class="nps-lead">You'll start with a short practice feed of a few articles, to get used to how it works. Then you'll browse {number_word(n_feeds)} news feeds, one after the other. Each one is a stream of real news articles from different outlets, and you can scroll through it for as long as you like.</p>
   <p class="nps-lead">The articles are there to be used, not just looked at: open the ones that catch your eye, read as much or as little of them as you want, and like the ones you enjoy. Browse them the way you'd browse news online.</p>
   <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes. Please finish in one sitting and don't refresh the page.</p>
 
@@ -1759,8 +1896,8 @@ def render_intro(data):
       <p>Each article opens with a short preview. Click <b>Read more</b> to keep reading. After that, <b>Read full article</b> shows the whole text.</p>
     </li>
     <li class="nps-row">
-      <div class="nps-token tok-swatches">{swatches}</div>
-      <p>The colour of each article's box shows which news outlet published it. Each colour is a different outlet.</p>
+      <div class="nps-token tok-logos">{logos}</div>
+      <p>The logo at the top of each article shows which news outlet published it.</p>
     </li>
     <li class="nps-row">
       <div class="nps-token"><span class="tok-like"><span class="tok-thumb" aria-hidden="true"></span><span>Like</span></span></div>
@@ -1786,12 +1923,23 @@ def render_feed(data):
     ss.page_server_start.setdefault(page_id, time.time())
 
     rewritten = page["text_version"] == "rewritten"
+    # Neutral keys (L1, L2, ...) instead of outlet names in the card data.
+    logo_keys = {o: f"L{i + 1}" for i, o in enumerate(data["outlets"])}
+    logos = ({logo_keys[o]: {"src": data["logos"][o]["src"], "alt": o} for o in data["outlets"]}
+             if page["source_visible"] else {})
+    if page["phase"] == 0:
+        progress_label = "Practice feed"
+    else:
+        n_main = sum(1 for p in ss.pages if p["phase"] > 0)
+        progress_label = f"Feed {page['phase']} of {n_main}"
     cards = []
     for uid in page["articles"]:
         art = data["articles"][uid]
         cards.append({
             "uid": uid,
-            "color": ss.color_map[art["outlet"]] if page["source_visible"] else None,
+            # Logo key, sent only when the source is visible: with the source
+            # hidden nothing in the page tells the outlets apart.
+            "logo": logo_keys[art["outlet"]] if page["source_visible"] else None,
             # Headline and body always come from the same version: Title +
             # clean_text for the original, LLM_title + LLM_text for the rewrite.
             "title": art["title_rewritten"] if rewritten else art["title"],
@@ -1803,13 +1951,15 @@ def render_feed(data):
         page_number=page["page_number"],
         total_pages=len(ss.pages),
         is_last=page["page_number"] == len(ss.pages),
+        progress_label=progress_label,
         articles=cards,
-        repeat_rounds=REPEAT_ROUNDS,
+        logos=logos,
+        logo_height=LOGO_HEIGHT_PX,
+        repeat_rounds=page["repeat_rounds"],
         preview_chars=PREVIEW_CHARS,
         readmore_chars=READMORE_CHARS,
-        min_seconds=MIN_FEED_SECONDS,
+        min_seconds=page["min_seconds"],
         countdown_visible_seconds=COUNTDOWN_VISIBLE_SECONDS,
-        card_tint=CARD_TINT,
         warn_on_leave=WARN_ON_LEAVE,
         key=f"feed-{page_id}",
         default=None,
@@ -1829,33 +1979,37 @@ def render_feed(data):
 
 
 def render_break():
-    """Pause between the two feeds, framed only as loading: the participant
-    is never told to take a break. The pause length can be computed from the
-    data as page_enter_ts (feed 2) - page_exit_ts (feed 1)."""
+    """Pause between two feeds, framed only as loading: the participant is
+    never told to take a break. The pause length can be computed from the
+    data as page_enter_ts (next feed) - page_exit_ts (previous feed)."""
     ss = st.session_state
     slot = st.empty()
 
+    upcoming = ss.pages[ss.page_idx]["phase"]
+    ordinal = {1: "first", 2: "second", 3: "third"}.get(upcoming, "next")
+    same_as = "the practice feed" if upcoming == 1 else "the first"
+
     if not ss.break_ready and BREAK_LOADING_SECONDS > 0:
-        slot.html("""
+        slot.html(f"""
 <section class="nps-wait">
   <div class="nps-loading" role="status">
     <span class="nps-spinner" aria-hidden="true"></span>
-    <span>Loading the second feed…</span>
+    <span>Loading the {ordinal} feed…</span>
   </div>
   <p class="nps-sub">Please don't refresh or close this page.</p>
 </section>""")
         time.sleep(BREAK_LOADING_SECONDS)
     ss.break_ready = True
 
-    slot.html("""
+    slot.html(f"""
 <section class="nps-wait">
   <div class="nps-loading">
-    <span>The second feed is ready.</span>
+    <span>The {ordinal} feed is ready.</span>
   </div>
-  <p class="nps-sub">It works the same way as the first. Please don't refresh or close this page.</p>
+  <p class="nps-sub">It works the same way as {same_as}. Please don't refresh or close this page.</p>
 </section>""")
 
-    if st.button("Continue", type="primary", key="break_button"):
+    if st.button("Continue", type="primary", key=f"break_button_{ss.page_idx}"):
         ss.stage = "feed"
         st.rerun()
 
@@ -1933,6 +2087,15 @@ def main():
     if errors:
         render_setup_error(errors)
         return
+
+    logos, missing = load_logos(tuple(data["outlets"]), _logo_index())
+    if missing:
+        render_setup_error(
+            [f"No logo for outlet '{o}': add the file data/logos/{logo_hint(o)} "
+             f"(.svg, .webp or .jpg also work)." for o in missing]
+            + [f"Logo folder: {LOGO_DIR}"])
+        return
+    data = dict(data, logos=logos)
 
     if stage == "intro":
         render_intro(data)
