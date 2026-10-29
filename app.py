@@ -121,8 +121,11 @@ LOGO_EXTENSIONS = (".png", ".svg", ".webp", ".jpg", ".jpeg")
 LOGO_FILES = {}
 # Logos larger than this trigger a warning in the log (they still work).
 LOGO_MAX_KB = 400
-# Logo height on the cards, in pixels (the width follows the image).
-LOGO_HEIGHT_PX = 40
+# Logo height on the cards, in pixels (the width follows the image), and
+# corner rounding, in pixels (0 = square corners; half the height = pill /
+# circle for square logos). On phones the logo is shown at 80% of this size.
+LOGO_HEIGHT_PX = 80
+LOGO_RADIUS_PX = 16
 
 # CSV column names. For each field the app uses the first name it finds.
 # Edit these lists if your CSV uses different names.
@@ -888,10 +891,11 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   .card { position: relative; background: var(--surface); border: 1px solid var(--line);
           border-radius: 12px; padding: 22px 26px 18px; }
   /* Source visible: the outlet logo sits at the top of the card. */
-  .source { display: flex; align-items: center; height: var(--logo-h, 40px);
-            margin: -4px 0 16px; padding: 0; }
-  .source img { display: block; height: 100%; width: auto; max-width: 300px;
-                object-fit: contain; object-position: left center; }
+  .source { display: flex; align-items: center; height: var(--logo-h, 80px);
+            margin: -4px 0 18px; padding: 0; }
+  .source img { display: block; height: 100%; width: auto; max-width: 420px;
+                object-fit: contain; object-position: left center;
+                border-radius: var(--logo-r, 16px); overflow: hidden; }
 
   .headline { font-family: var(--sans); font-weight: 600; font-size: 21px; line-height: 1.28;
               letter-spacing: -0.012em; margin: 0 0 10px; color: var(--ink); text-wrap: pretty; }
@@ -937,7 +941,8 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   @media (max-width: 560px) {
     .card { padding: 18px 18px 16px; }
-    .source img { max-width: 220px; }
+    .source { height: calc(var(--logo-h, 80px) * 0.8); }
+    .source img { max-width: 100%; border-radius: calc(var(--logo-r, 16px) * 0.8); }
     .headline { font-size: 19px; }
     .body { font-size: 16.5px; }
     .actions { align-items: stretch; }
@@ -1283,6 +1288,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     };
     root.textContent = "";
     if (args.logo_height) root.style.setProperty("--logo-h", args.logo_height + "px");
+    if (typeof args.logo_radius === "number") root.style.setProperty("--logo-r", args.logo_radius + "px");
 
     // Furthest round the participant scrolled to (a card at least half visible).
     if (window.IntersectionObserver) {
@@ -1484,15 +1490,16 @@ iframe { border: 0 !important; }
 }
 ul.nps-rows { list-style: none !important; margin: 0 0 30px !important; padding: 0 !important;
               display: grid; gap: 20px; }
-li.nps-row { display: grid; grid-template-columns: 180px 1fr; gap: 22px; align-items: center;
+li.nps-row { display: grid; grid-template-columns: 200px 1fr; gap: 22px; align-items: center;
              margin: 0 !important; padding: 0 !important; }
 li.nps-row::marker { content: none; }
 .nps-row p { margin: 0; font-size: 16px; line-height: 1.55; color: var(--ink-2); }
 .nps-row b { color: var(--ink); font-weight: 600; }
 .nps-token { display: flex; align-items: center; justify-content: flex-start; }
 .tok-logos { display: grid !important; grid-template-columns: repeat(2, auto);
-             gap: 8px 12px; justify-content: start; align-items: center; }
-.tok-logos img { display: block; height: 28px; width: auto; max-width: 84px; object-fit: contain; }
+             gap: 10px 10px; justify-content: start; align-items: center; }
+.tok-logos img { display: block; height: auto; width: auto; max-height: 40px; max-width: 95px;
+                 border-radius: 8px; }
 .tok-more {
   font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: underline;
   text-decoration-thickness: 1.5px; text-decoration-color: var(--line-strong);
@@ -1955,6 +1962,7 @@ def render_feed(data):
         articles=cards,
         logos=logos,
         logo_height=LOGO_HEIGHT_PX,
+        logo_radius=LOGO_RADIUS_PX,
         repeat_rounds=page["repeat_rounds"],
         preview_chars=PREVIEW_CHARS,
         readmore_chars=READMORE_CHARS,
