@@ -24,6 +24,12 @@ participant the split is drawn at random among all the balanced ones (see
 balanced_counts and compute_split_options); within each topic x outlet cell,
 which articles go to which phase is random too.
 
+FEED_STYLE picks how a feed is shown: "scroll" (app.py) or "swipe"
+(app_swipe.py: one card at a time, swiped left or right, or Next / arrow
+keys, to move on; the swipe has no meaning beyond moving on, liking stays the
+Like button; each time a card is on screen is saved as a view with its time
+on screen). The two files differ only in that line.
+
 Each phase is ONE scrolling feed with all its articles, in an order
 randomised independently for each phase and each participant. So that the
 feed never seems to end, the same sequence is repeated REPEAT_ROUNDS times
@@ -258,12 +264,21 @@ BLOCK_DUPLICATE_PID = True
 # missing from secrets.toml. Leave "" to rely on secrets only.
 PROLIFIC_COMPLETION_CODE = ""
 
+# Feed style: "scroll" = one scrolling feed with all the cards (app.py);
+# "swipe" = one card at a time, swiped left or right (or Next / arrow keys)
+# to see the next one, Tinder-style (app_swipe.py). The swipe only moves on:
+# liking stays the Like button. Everything else is identical.
+FEED_STYLE = "scroll"
+
 # New tab names (v5): the practice phase is gone and the outlet survey is
 # new, so the data go to fresh tabs instead of being mixed with v4 data.
-SHEET_ASSIGNMENTS = "assignments_v5"
-SHEET_SESSIONS = "sessions_v5"
-SHEET_RESPONSES = "responses_v5"
-SHEET_OUTLETS = "outlets_v5"     # one row per participant x survey outlet
+# The swipe version writes to its own tabs (suffix "_swipe"), and balances
+# the conditions on its own participants.
+_SHEET_SUFFIX = "_swipe" if FEED_STYLE == "swipe" else ""
+SHEET_ASSIGNMENTS = "assignments_v5" + _SHEET_SUFFIX
+SHEET_SESSIONS = "sessions_v5" + _SHEET_SUFFIX
+SHEET_RESPONSES = "responses_v5" + _SHEET_SUFFIX
+SHEET_OUTLETS = "outlets_v5" + _SHEET_SUFFIX     # one row per participant x survey outlet
 
 ASSIGNMENT_HEADERS = ["session_id", "prolific_pid", "condition", "assigned_at_utc"]
 
@@ -276,7 +291,7 @@ SESSION_HEADERS = [
     "opened_at_utc", "started_at_utc", "completed_at_utc",
     "duration_min", "n_articles", "n_readmore", "n_full", "n_likes",
     "phase1_max_round", "phase2_max_round",
-    "user_agent", "app_version",
+    "feed_style", "user_agent", "app_version",
 ]
 
 RESPONSE_HEADERS = [
@@ -288,6 +303,10 @@ RESPONSE_HEADERS = [
     "full_available", "full_clicked", "full_ms", "full_ts", "full_round",
     "liked_final", "like_toggles", "like_history",
     "rounds_shown", "max_round_reached",
+    # swipe version only (empty in the scroll version): how many times the
+    # card was on screen, total time on screen, swipes by direction, and
+    # every view as JSON [{round, enter_ms, exit_ms, dir, method}].
+    "n_views", "dwell_total_ms", "dwell_first_ms", "n_swipe_left", "n_swipe_right", "views",
     "page_enter_ts", "page_exit_ts", "page_duration_ms", "page_duration_server_s",
     "year", "month", "rating",
 ]
@@ -1037,6 +1056,45 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     .actions { align-items: stretch; }
     .next { width: 100%; }
   }
+  /* ---------- swipe mode: one card at a time ---------- */
+  .deck-hint { margin: 0 0 12px; font-size: 14px; line-height: 1.4; color: var(--ink-3); text-align: center; }
+  /* Bottom margin: room for the card shadow inside this frame. */
+  .deck { position: relative; height: var(--deck-h, 560px); margin: 0 auto 28px; max-width: 620px; }
+  .deck .card { position: absolute; inset: 0; padding: 0; display: flex; flex-direction: column;
+                overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none;
+                box-shadow: 0 12px 22px -12px rgba(25, 28, 32, .22); will-change: transform;
+                cursor: grab; }
+  .deck .card.dragging { cursor: grabbing; transition: none !important; }
+  .deck .card.settle { transition: transform .25s cubic-bezier(.2, .7, .2, 1); }
+  .deck .card.fly { transition: transform .3s ease-in, opacity .3s ease-in; opacity: 0; }
+  .deck .card.peek { transform: translateY(12px) scale(.955); box-shadow: none; cursor: default;
+                     transition: transform .3s cubic-bezier(.2, .7, .2, 1); }
+  .deck .card.peek.up { transform: none; }
+  .deck .card.peek > * { visibility: hidden; }
+  /* Horizontal finger movement must reach the drag code: no element in the
+     card may pan sideways (the scrolling text box included). */
+  .deck .card, .deck .card * { touch-action: pan-y; }
+  .card-scroll { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
+                 padding: 22px 26px 18px; -webkit-overflow-scrolling: touch; }
+  .card-scroll .body { user-select: text; -webkit-user-select: text; }
+  .card-foot { flex: none; display: flex; align-items: center; justify-content: space-between;
+               gap: 12px; padding: 12px 26px; border-top: 1px solid var(--line); background: var(--surface); }
+  .deck-next { appearance: none; display: inline-flex; align-items: center; gap: 8px; height: 36px;
+               padding: 0 14px 0 16px; border-radius: 18px; border: 1px solid var(--line);
+               background: var(--surface); color: var(--ink-2); font: 500 14px/1 var(--sans);
+               cursor: pointer; }
+  .deck-next:hover { border-color: var(--line-strong); color: var(--ink); }
+  .deck-next svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2;
+                   stroke-linecap: round; stroke-linejoin: round; }
+  .deck-end { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+              justify-content: center; text-align: center; padding: 24px; background: var(--surface);
+              border: 1px solid var(--line); border-radius: 12px; }
+  .deck-end p { margin: 0; font-size: 16px; line-height: 1.5; color: var(--ink-2); max-width: 26em; }
+  @media (max-width: 560px) {
+    .card-scroll { padding: 18px 18px 16px; }
+    .card-foot { padding: 10px 18px; }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; }
   }
@@ -1048,6 +1106,8 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 (function () {
   "use strict";
 
+  var NEXT_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg>';
+  var SWIPE_HINT = "Swipe the card left or right to see the next article.";
   var THUMB = '__THUMB_SVG__';
   var BAR_ID = "nps-feedbar";
   // Shown once the button unlocks, and when it is clicked too early.
@@ -1262,7 +1322,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
       else renderBody(a, other, Number.MAX_SAFE_INTEGER);
     }
     var shift = inst.card.getBoundingClientRect().top - topBefore;
-    if (Math.abs(shift) >= 1) {
+    if (!state.swipe && Math.abs(shift) >= 1) {
       var scroller = parentScroller();
       if (scroller) scroller.scrollTop += shift;
     }
@@ -1293,6 +1353,15 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   function buildCard(a, round) {
     var card = el("article", "card");
+    // Swipe mode: the content scrolls inside the card and the Like / Next
+    // buttons sit in a footer that is always visible.
+    var box = card;
+    if (state.swipe) {
+      box = el("div", "card-scroll");
+      card.appendChild(box);
+      a.instances = [];       // only the card on screen is kept in sync
+      a.likeButtons = [];
+    }
     var logo = a.logo ? state.logos[a.logo] : null;
     if (logo) {
       card.classList.add("sourced");
@@ -1304,13 +1373,20 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
       img.draggable = false;
       src.appendChild(img);
       if (logo.name) src.appendChild(el("span", "source-name", logo.name));
-      card.appendChild(src);
+      box.appendChild(src);
     }
-    if (a.title) card.appendChild(el("h2", "headline", a.title));
+    if (a.title) box.appendChild(el("h2", "headline", a.title));
     var inst = { round: round, card: card, bodyEl: el("div", "body") };
-    card.appendChild(inst.bodyEl);
-    var foot = el("div", "foot");
+    box.appendChild(inst.bodyEl);
+    var foot = el("div", state.swipe ? "card-foot" : "foot");
     foot.appendChild(buildLike(a, inst));
+    if (state.swipe) {
+      var nb = el("button", "deck-next");
+      nb.type = "button";
+      nb.innerHTML = "<span>Next</span>" + NEXT_SVG;
+      nb.addEventListener("click", function () { flyOut(1, "button"); });
+      foot.appendChild(nb);
+    }
     card.appendChild(foot);
     a.instances.push(inst);
     renderBody(a, inst, Number.MAX_SAFE_INTEGER);
@@ -1318,6 +1394,177 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     if (viewObserver) viewObserver.observe(card);
     return card;
   }
+
+  // ---- swipe mode ----------------------------------------------------------
+  // One card at a time. The deck is the article sequence repeated `rounds`
+  // times. Dragging the card left or right past SWIPE_PX (or flicking it),
+  // the Next button and the arrow keys all move to the next card; the
+  // direction is only recorded, it has no meaning. Every time a card is on
+  // screen counts as one view of that article: {round, enter_ms, exit_ms,
+  // dir (-1 left / 1 right / null), method (drag / button / key / continue)}.
+  var SWIPE_PX = 90, FLICK_PX_PER_MS = 0.6;
+
+  function deckHeight() {
+    var ph = 0;
+    try { ph = window.parent.innerHeight; } catch (e) { ph = 0; }
+    if (!ph) ph = 800;
+    // Room for the page padding, the progress bar, the hint and the fixed
+    // Continue bar at the bottom.
+    return Math.max(340, Math.min(760, ph - 300));
+  }
+  function sizeDeck() {
+    if (state && state.swipe) root.style.setProperty("--deck-h", deckHeight() + "px");
+  }
+  try { window.parent.addEventListener("resize", function () { sizeDeck(); updateHeight(); }); } catch (e) {}
+
+  function buildDeck() {
+    state.deck = [];
+    for (var r = 1; r <= state.rounds; r++) {
+      for (var i = 0; i < state.articles.length; i++) state.deck.push({ a: state.articles[i], round: r });
+    }
+    state.pos = 0;
+    state.current = null;
+    installParentArrows();
+    sizeDeck();
+    root.appendChild(el("p", "deck-hint", SWIPE_HINT));
+    state.deckEl = el("div", "deck");
+    root.appendChild(state.deckEl);
+    showCard();
+  }
+
+  function showCard() {
+    var deck = state.deckEl;
+    deck.textContent = "";
+    state.current = null;
+    if (state.pos >= state.deck.length) {
+      var end = el("div", "deck-end");
+      end.appendChild(el("p", null, "You've seen every article in this feed. Click Continue at the bottom of the screen to move on."));
+      deck.appendChild(end);
+      updateHeight();
+      return;
+    }
+    // An empty card behind the current one, for depth.
+    if (state.pos + 1 < state.deck.length) {
+      var peek = el("div", "card peek");
+      peek.setAttribute("aria-hidden", "true");
+      deck.appendChild(peek);
+      state.peekEl = peek;
+    } else {
+      state.peekEl = null;
+    }
+    var entry = state.deck[state.pos];
+    var card = buildCard(entry.a, entry.round);
+    deck.appendChild(card);
+    if (entry.round > state.maxRound) state.maxRound = entry.round;
+    state.current = { entry: entry, card: card, enter: ms(), leaving: false };
+    attachDrag(card);
+    updateHeight();
+  }
+
+  function closeView(dir, method) {
+    var cur = state.current;
+    if (!cur) return;
+    cur.entry.a.views.push({ round: cur.entry.round, enter_ms: cur.enter, exit_ms: ms(),
+                             dir: dir, method: method });
+  }
+
+  function flyOut(dir, method) {
+    var cur = state.current;
+    if (!cur || cur.leaving || state.submitted) return;
+    cur.leaving = true;
+    closeView(dir, method);
+    var card = cur.card;
+    var w = card.getBoundingClientRect().width || 400;
+    card.classList.remove("dragging", "settle");
+    card.classList.add("fly");
+    card.style.transform = "translateX(" + (dir * w * 1.3) + "px) rotate(" + (dir * 14) + "deg)";
+    if (state.peekEl) state.peekEl.classList.add("up");
+    var done = false;
+    function next() {
+      if (done) return;
+      done = true;
+      state.pos += 1;
+      showCard();
+    }
+    card.addEventListener("transitionend", next, { once: true });
+    setTimeout(next, 380);   // in case transitionend never fires (reduced motion)
+  }
+
+  function attachDrag(card) {
+    var startX = 0, startY = 0, dx = 0, t0 = 0, id = null, dragging = false;
+    card.addEventListener("pointerdown", function (e) {
+      if (state.submitted || e.button > 0) return;
+      if (e.target.closest && e.target.closest("button, a")) return;
+      id = e.pointerId; startX = e.clientX; startY = e.clientY; dx = 0; dragging = false;
+      t0 = performance.now();
+    });
+    card.addEventListener("pointermove", function (e) {
+      if (e.pointerId !== id) return;
+      var mx = e.clientX - startX, my = e.clientY - startY;
+      if (!dragging) {
+        // Only a clearly horizontal movement becomes a drag; vertical
+        // movement keeps scrolling the text.
+        if (Math.abs(mx) < 10 || Math.abs(mx) < Math.abs(my) * 1.2) {
+          if (Math.abs(my) > 10) id = null;
+          return;
+        }
+        dragging = true;
+        card.classList.remove("settle");
+        card.classList.add("dragging");
+        try { card.setPointerCapture(id); } catch (err) {}
+        try { window.getSelection().removeAllRanges(); } catch (err) {}
+      }
+      dx = mx;
+      card.style.transform = "translateX(" + dx + "px) rotate(" + (dx / 22) + "deg)";
+      e.preventDefault();
+    });
+    function release(e) {
+      if (e.pointerId !== id) return;
+      id = null;
+      if (!dragging) return;
+      dragging = false;
+      card.classList.remove("dragging");
+      var speed = Math.abs(dx) / Math.max(1, performance.now() - t0);
+      if (Math.abs(dx) > SWIPE_PX || (Math.abs(dx) > 30 && speed > FLICK_PX_PER_MS)) {
+        flyOut(dx > 0 ? 1 : -1, "drag");
+      } else {
+        card.classList.add("settle");
+        card.style.transform = "";
+      }
+    }
+    card.addEventListener("pointerup", release);
+    card.addEventListener("pointercancel", release);
+  }
+
+  // Arrow keys work wherever the focus is: in this frame or in the page
+  // around it (e.g. right after clicking a Streamlit button). The page-level
+  // listener is replaced by each new feed, so only the live one answers.
+  function onArrow(e) {
+    if (!state || !state.swipe || state.submitted) return;
+    var t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return;
+    if (e.key === "ArrowRight") { e.preventDefault(); flyOut(1, "key"); }
+    else if (e.key === "ArrowLeft") { e.preventDefault(); flyOut(-1, "key"); }
+  }
+  document.addEventListener("keydown", onArrow);
+  function installParentArrows() {
+    try {
+      var d = window.parent.document;
+      if (d === document) return;
+      if (window.parent.__npsArrows) d.removeEventListener("keydown", window.parent.__npsArrows);
+      window.parent.__npsArrows = onArrow;
+      d.addEventListener("keydown", onArrow);
+    } catch (err) { /* cross-origin: keys work inside the frame only */ }
+  }
+  function removeParentArrows() {
+    try {
+      if (window.parent.__npsArrows === onArrow) {
+        window.parent.document.removeEventListener("keydown", onArrow);
+        window.parent.__npsArrows = null;
+      }
+    } catch (err) { /* ignore */ }
+  }
+  window.addEventListener("pagehide", removeParentArrows);
 
   // ---- minimum time on the feed -------------------------------------------
   // The Continue / Finish button stays locked until `minMs` have passed since
@@ -1374,7 +1621,8 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
       minMs: Math.max(0, (args.min_seconds || 0) * 1000),
       revealMs: Math.max(0, (args.countdown_visible_seconds || 0) * 1000),
       nudgeUntil: 0, hintEl: null,
-      rounds: Math.max(1, args.repeat_rounds || 1), maxRound: 0, articles: []
+      rounds: Math.max(1, args.repeat_rounds || 1), maxRound: 0, articles: [],
+      swipe: args.feed_style === "swipe"
     };
     root.textContent = "";
     if (args.logo_height) root.style.setProperty("--logo-h", args.logo_height + "px");
@@ -1433,19 +1681,23 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
         sentences: sentences, flat: flatten(sentences),
         stage: 0, readmore_ms: null, readmore_ts: null, readmore_round: null,
         full_ms: null, full_ts: null, full_round: null,
-        liked: false, history: [], instances: [], likeButtons: []
+        liked: false, history: [], instances: [], likeButtons: [], views: []
       };
       a.readmoreAvailable = a.flat.length > state.previewChars;
       a.fullAvailable = a.flat.length > state.readmoreChars;
       return a;
     });
 
-    // The same sequence, repeated `rounds` times.
-    var feed = el("div", "feed");
-    for (var r = 1; r <= state.rounds; r++) {
-      for (var i = 0; i < state.articles.length; i++) feed.appendChild(buildCard(state.articles[i], r));
+    if (state.swipe) {
+      buildDeck();
+    } else {
+      // The same sequence, repeated `rounds` times.
+      var feed = el("div", "feed");
+      for (var r = 1; r <= state.rounds; r++) {
+        for (var i = 0; i < state.articles.length; i++) feed.appendChild(buildCard(state.articles[i], r));
+      }
+      root.appendChild(feed);
     }
-    root.appendChild(feed);
 
     startCountdown(next, hint, label);
 
@@ -1472,6 +1724,8 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
     button.textContent = "One moment…";
     setHint(state.hintEl, "");
     if (viewObserver) { viewObserver.disconnect(); viewObserver = null; }
+    if (state.swipe && state.current && !state.current.leaving) closeView(null, "continue");
+    if (state.swipe) removeParentArrows();
     var payload = {
       page_id: currentPage,
       page_enter_ts: state.enterTs,
@@ -1486,7 +1740,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
           readmore_ts: a.readmore_ts, readmore_round: a.readmore_round,
           full_available: a.fullAvailable, full_ms: a.full_ms,
           full_ts: a.full_ts, full_round: a.full_round,
-          liked: a.liked, like_history: a.history
+          liked: a.liked, like_history: a.history, views: a.views
         };
       })
     };
@@ -2007,6 +2261,11 @@ li.nps-row.nps-row-logos { grid-template-columns: 1fr; gap: 14px; }
   -webkit-mask: url("__THUMB_MASK__") center / contain no-repeat;
   mask: url("__THUMB_MASK__") center / contain no-repeat;
 }
+.tok-swipe {
+  display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 14px;
+  border-radius: 10px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font-weight: 600; font-size: 14px; box-shadow: 0 4px 12px rgba(25, 28, 32, .08);
+}
 .tok-next {
   display: inline-flex; align-items: center; height: 34px; padding: 0 18px; border-radius: 17px;
   background: var(--ink); color: #FFFFFF; font-weight: 600; font-size: 14px;
@@ -2270,6 +2529,22 @@ def start_study(data):
         f"{len(order['1'])} + {len(order['2'])} articles")
 
 
+def _view_stats(views):
+    """Summary of the swipe-mode views of one article (empty in scroll mode)."""
+    if FEED_STYLE != "swipe":
+        return {}
+    views = views or []
+    dwell = [max(0, (v.get("exit_ms") or 0) - (v.get("enter_ms") or 0)) for v in views]
+    return {
+        "n_views": len(views),
+        "dwell_total_ms": sum(dwell),
+        "dwell_first_ms": dwell[0] if dwell else None,
+        "n_swipe_left": sum(1 for v in views if v.get("dir") == -1),
+        "n_swipe_right": sum(1 for v in views if v.get("dir") == 1),
+        "views": json.dumps(views),
+    }
+
+
 def record_page(data, page, page_id, result, cards):
     ss = st.session_state
     shown = {c["uid"]: c for c in cards}
@@ -2320,6 +2595,7 @@ def record_page(data, page, page_id, result, cards):
             "year": art["year"],
             "month": art["month"],
             "rating": art["rating"],
+            **_view_stats(item.get("views")),
         })
 
 
@@ -2363,6 +2639,7 @@ def build_session_row():
         "phase1_max_round": max_round(1),
         "phase2_max_round": max_round(2),
         "user_agent": ss.user_agent,
+        "feed_style": FEED_STYLE,
         "app_version": APP_VERSION,
     }
 
@@ -2518,15 +2795,28 @@ def render_intro(data):
                      "so take your time.")
     else:
         wait_note = ""
+    if FEED_STYLE == "swipe":
+        feed_desc = ("Each one is a stream of real news articles from different outlets, shown "
+                     "one at a time, and you can go through it for as long as you like.")
+        swipe_row = ('<li class="nps-row"><div class="nps-token"><span class="tok-swipe">'
+                     '<span aria-hidden="true">&larr;</span> Swipe <span aria-hidden="true">&rarr;</span>'
+                     '</span></div><p>Swipe the article card <b>left or right</b> to see the next one. '
+                     'On a computer you can also drag it with the mouse, use the arrow keys, or click '
+                     '<b>Next</b>.</p></li>')
+    else:
+        feed_desc = ("Each one is a stream of real news articles from different outlets, and you "
+                     "can scroll through it for as long as you like.")
+        swipe_row = ""
     st.html(f"""
 <section class="nps-intro" style="--intro-logo-h: {INTRO_LOGO_HEIGHT_PX}px">
   <h1 class="nps-title">News Perception Study</h1>
-  <p class="nps-lead">You'll start with a few quick questions about some news outlets. Then you'll browse {number_word(n_feeds)} news feeds, one after the other. Each one is a stream of real news articles from different outlets, and you can scroll through it for as long as you like.</p>
+  <p class="nps-lead">You'll start with a few quick questions about some news outlets. Then you'll browse {number_word(n_feeds)} news feeds, one after the other. {feed_desc}</p>
   <p class="nps-lead">The articles are there to be used, not just looked at: open the ones that catch your eye, read as much or as little of them as you want, and like the ones you enjoy. Browse them the way you'd browse news online.</p>
   <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes. Please finish in one sitting and don't refresh the page.</p>
 
   <h2 class="nps-h2">How it works</h2>
   <ul class="nps-rows">
+    {swipe_row}
     <li class="nps-row">
       <div class="nps-token"><span class="tok-more">…&nbsp;Read more</span></div>
       <p>Each article opens with a short preview. Click <b>Read more</b> to keep reading. After that, <b>Read full article</b> shows the whole text.</p>
@@ -2649,6 +2939,7 @@ def render_feed(data):
         readmore_chars=READMORE_CHARS,
         min_seconds=page["min_seconds"],
         countdown_visible_seconds=COUNTDOWN_VISIBLE_SECONDS,
+        feed_style=FEED_STYLE,
         warn_on_leave=WARN_ON_LEAVE,
         key=f"feed-{page_id}",
         default=None,
@@ -2693,7 +2984,12 @@ def render_break():
         time.sleep(wait)
     ss.break_ready = True
 
-    if first:
+    if first and FEED_STYLE == "swipe":
+        note = ("The articles come one at a time: swipe the card left or right to see the next "
+                "one. Open the ones that catch your eye with <b>Read more</b>, like the ones you "
+                "enjoy, and click <b>Continue</b> at the bottom of the screen when you want to "
+                "move on.")
+    elif first:
         note = ("Browse it the way you'd browse news online: open the articles that catch "
                 "your eye with <b>Read more</b>, like the ones you enjoy, and click "
                 "<b>Continue</b> at the bottom of the screen when you want to move on.")
