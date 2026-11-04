@@ -1,0 +1,141 @@
+/Users/jacoponudo/Documents/Projects/inerzia/leaning_analysis.py:1035: Pandas4Warning: Setting a new column on a DataFrame with a MultiIndex using a key that is not a full-length tuple is deprecated and will raise in a future version. Use a full-length tuple key instead.
+  dist["all"] = df["eng"].value_counts(normalize=True).sort_index() * 100
+Data file: /Users/jacoponudo/Documents/Projects/inerzia/results/Risposte Pilota Inerzia - responses_v4.csv
+Sessions with Prolific ID: 105 of 105 (excluded 0 sessions without Prolific ID)
+
+Data: 3360 rows (reliable/unreliable only), 105 participants, conditions: ['1', '2', '3', '4']
+phase   1   2
+1      25  25
+2      29  29
+3      26  26
+4      25  25 
+
+==========================================================================================
+ENGAGEMENT DISTRIBUTION (per user-article interaction)
+------------------------------------------------------------------------------------------
+% of interactions with each score E (columns: phase, reliability):
+phase                    1                   2              all
+reliability_class reliable unreliable reliable unreliable      
+eng                                                            
+0                     58.8       66.7     64.6       70.8  65.2
+1                     24.0       22.0     21.1       20.8  22.0
+2                     11.7        8.2     10.2        5.1   8.8
+3                      5.5        3.1      4.0        3.2   4.0
+
+Median E = 0  ->  binary engagement: E > 0  ->  34.8% of interactions engaged
+reliability_class
+reliable      38.3
+unreliable    31.2 
+
+==========================================================================================
+METRIC: Engagement score (read more + read full + like)   (participants with both phases: 105)
+------------------------------------------------------------------------------------------
+1) Leaning phase 1 vs phase 2 within each condition
+condition  n  mean_L_phaseA  mean_L_phaseB  mean_delta  delta_ci_lo  delta_ci_hi  cohen_dz  p_wilcoxon_holm  p_ttest_holm
+        1 25          0.135          0.055      -0.080       -0.421        0.261    -0.097            1.000         1.000
+        2 29          0.211          0.237       0.026       -0.160        0.212     0.053            1.000         1.000
+        3 26          0.154          0.115      -0.038       -0.209        0.132    -0.091            1.000         1.000
+        4 25          0.135          0.095      -0.040       -0.232        0.152    -0.086            1.000         1.000
+
+2) Does Delta differ across conditions?  Kruskal-Wallis H=1.273, p=0.7355 | ANOVA F=0.162, p=0.9218
+   (baseline check, leaning in phase 1 across conditions: KW p=0.9179)
+cond_1 cond_2  mean_1  mean_2     p  p_holm
+     1      2  -0.080   0.026 0.644   1.000
+     1      3  -0.080  -0.038 0.641   1.000
+     1      4  -0.080  -0.040 0.930   1.000
+     2      3   0.026  -0.038 0.265   1.000
+     2      4   0.026  -0.040 0.541   1.000
+     3      4  -0.038  -0.040 0.535   1.000
+
+3) Agreement of leaning between phases (higher = more stable)
+condition  n    CCC  CCC_ci_lo  CCC_ci_hi  ICC_A1  spearman_rho  mean_abs_delta  pct_same_sign
+        1 25 -0.278     -0.574      0.240  -0.293        -0.241           0.530         36.000
+        2 29  0.115     -0.206      0.490   0.119         0.163           0.336         48.276
+        3 26  0.325     -0.182      0.654   0.334         0.301           0.298         53.846
+        4 25 -0.003     -0.548      0.574  -0.003        -0.004           0.310         56.000
+   -> Highest agreement: condition 3 (source visible / rewritten text), CCC=0.325
+   Omnibus permutation test (CCC equal across conditions): p=0.4513
+cond_1 cond_2   diff  p_perm  p_perm_holm
+     1      2 -0.394   0.270        1.000
+     1      3 -0.603   0.125        0.753
+     1      4 -0.275   0.504        1.000
+     2      3 -0.210   0.477        1.000
+     2      4  0.119   0.737        1.000
+     3      4  0.329   0.409        1.000
+
+4) GEE (linear, article level): Joint Wald test, triple interaction reliable x phase x condition (df=3): chi2 = 0.494, p = 0.9201
+
+5) Engagement phase 1 vs 2 by condition and reliability (participant means, paired Wilcoxon)
+condition reliability  n  mean_phaseA  mean_phaseB  mean_diff  p_wilcoxon  p_wilcoxon_holm
+        1    reliable 25        0.705        0.535     -0.170       0.099            0.593
+        1  unreliable 25        0.570        0.480     -0.090       0.262            1.000
+        2    reliable 29        0.629        0.509     -0.121       0.055            0.384
+        2  unreliable 29        0.418        0.272     -0.147       0.039            0.309
+        3    reliable 26        0.639        0.558     -0.082       0.251            1.000
+        3  unreliable 26        0.486        0.442     -0.043       0.551            1.000
+        4    reliable 25        0.580        0.550     -0.030       0.451            1.000
+        4  unreliable 25        0.445        0.455      0.010       1.000            1.000
+
+==========================================================================================
+METRIC: Binary engagement (E > median = 0)   (participants with both phases: 105)
+------------------------------------------------------------------------------------------
+1) Leaning phase 1 vs phase 2 within each condition
+condition  n  mean_L_phaseA  mean_L_phaseB  mean_delta  delta_ci_lo  delta_ci_hi  cohen_dz  p_wilcoxon_holm  p_ttest_holm
+        1 25          0.065          0.030      -0.035       -0.194        0.124    -0.091            1.000         1.000
+        2 29          0.086          0.121       0.034       -0.069        0.138     0.126            1.000         1.000
+        3 26          0.072          0.029      -0.043       -0.126        0.040    -0.210            1.000         1.000
+        4 25          0.090          0.060      -0.030       -0.130        0.070    -0.124            1.000         1.000
+
+2) Does Delta differ across conditions?  Kruskal-Wallis H=1.963, p=0.5802 | ANOVA F=0.444, p=0.7217
+   (baseline check, leaning in phase 1 across conditions: KW p=0.8647)
+cond_1 cond_2  mean_1  mean_2     p  p_holm
+     1      2  -0.035   0.034 0.331   1.000
+     1      3  -0.035  -0.043 1.000   1.000
+     1      4  -0.035  -0.030 0.961   1.000
+     2      3   0.034  -0.043 0.192   1.000
+     2      4   0.034  -0.030 0.297   1.000
+     3      4  -0.043  -0.030 0.977   1.000
+
+3) Agreement of leaning between phases (higher = more stable)
+condition  n    CCC  CCC_ci_lo  CCC_ci_hi  ICC_A1  spearman_rho  mean_abs_delta  pct_same_sign
+        1 25 -0.188     -0.496      0.192  -0.197        -0.129           0.275         36.000
+        2 29 -0.005     -0.320      0.266  -0.005        -0.027           0.216         48.276
+        3 26  0.194     -0.223      0.484   0.200         0.147           0.159         46.154
+        4 25  0.274     -0.154      0.559   0.282         0.239           0.190         52.000
+   -> Highest agreement: condition 4 (source hidden / rewritten text), CCC=0.274
+   Omnibus permutation test (CCC equal across conditions): p=0.3713
+cond_1 cond_2   diff  p_perm  p_perm_holm
+     1      2 -0.183   0.502        1.000
+     1      3 -0.382   0.240        1.000
+     1      4 -0.462   0.162        0.975
+     2      3 -0.198   0.412        1.000
+     2      4 -0.279   0.259        1.000
+     3      4 -0.080   0.772        1.000
+
+4) GEE (logistic, article level): Joint Wald test, triple interaction reliable x phase x condition (df=3): chi2 = 2.151, p = 0.5417
+
+5) Engagement phase 1 vs 2 by condition and reliability (participant means, paired Wilcoxon)
+condition reliability  n  mean_phaseA  mean_phaseB  mean_diff  p_wilcoxon  p_wilcoxon_holm
+        1    reliable 25        0.455        0.360     -0.095       0.194            1.000
+        1  unreliable 25        0.390        0.330     -0.060       0.310            1.000
+        2    reliable 29        0.397        0.336     -0.060       0.205            1.000
+        2  unreliable 29        0.310        0.216     -0.095       0.037            0.297
+        3    reliable 26        0.389        0.341     -0.048       0.125            0.876
+        3  unreliable 26        0.317        0.312     -0.005       0.791            1.000
+        4    reliable 25        0.410        0.380     -0.030       0.521            1.000
+        4  unreliable 25        0.320        0.320      0.000       0.967            1.000
+
+
+SUPPLEMENTARY - articles: 36, Kruskal-Wallis across articles p=1.228e-08; topic p=0.7579; reliable vs unreliable (article level) p=0.001829
+Top 5 articles by engagement:
+                 topic reliability                              label  n_interactions  mean_eng
+article_uid                                                                                    
+a31           politics    reliable           politics | ‘This was a …              97      0.84
+a26          economics  unreliable  economics | Zillow says housing …              98      0.83
+30           economics    reliable      economics | Energy and food …              92      0.80
+a23          economics    reliable   economics | Trump’s job losses …              97      0.75
+1            economics    reliable  economics | Recession fears are …              93      0.72
+
+Figures saved in: /Users/jacoponudo/Documents/Projects/inerzia/figures
+Supplementary in: /Users/jacoponudo/Documents/Projects/inerzia/figures/supplementary
+Tables saved in:  /Users/jacoponudo/Documents/Projects/inerzia/figures/leaning_tables

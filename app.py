@@ -2,32 +2,32 @@
 News Perception Study
 =====================
 
-Streamlit app for the news-feed experiment: a practice feed, then two feeds.
+Streamlit app for the news-feed experiment: an outlet survey, then two feeds.
 
-    Phase 0 (practice):  4 articles, one per outlet. Every participant sees
-                         the outlet logo and the original text. It only lets
-                         participants learn the interface.
+    Outlets, step 1:     the participant sees the SURVEY_OUTLETS (logo and
+                         name, in random order) and says for each one whether
+                         they know it.
+    Outlets, step 2:     for each outlet they know, a Likert scale: how much
+                         they would like to come across it in their news feed.
+                         Skipped when they know none of them.
     Phase 1 (feed 1):    every participant sees the outlet logo and the
                          original text.
     Phase 2 (feed 2):    the between-subject treatment (2 x 2):
                          source visible / hidden  x  original / LLM-rewritten.
 
 The article set has 3 topics x 4 outlets x 3 articles = 36 articles:
-PHASE0_ARTICLES (4) in phase 0, PHASE1_ARTICLES (16) in phase 1 and the
-remaining 16 in phase 2. Every phase is balanced by outlet, topic,
-reliability class and topic x reliability class: phase 0 has exactly one
-article per outlet (two reliable, two unreliable, never two of the same
-class on one topic); phases 1 and 2 have 4 articles per outlet each and
-split the rest as evenly as possible. For each participant the split is
-drawn at random among all the balanced ones (see balanced_counts and
-compute_split_options); within each topic x outlet cell, which articles go
-to which phase is random too.
+PHASE1_ARTICLES (18) in phase 1 and the remaining 18 in phase 2. Both phases
+are balanced by outlet, topic, reliability class and topic x reliability
+class: each gets half of every group, rounded down or up (e.g. 4 or 5
+articles per outlet, 6 per topic, 9 reliable and 9 unreliable). For each
+participant the split is drawn at random among all the balanced ones (see
+balanced_counts and compute_split_options); within each topic x outlet cell,
+which articles go to which phase is random too.
 
 Each phase is ONE scrolling feed with all its articles, in an order
 randomised independently for each phase and each participant. So that the
 feed never seems to end, the same sequence is repeated REPEAT_ROUNDS times
-(default 10) in phases 1 and 2; the practice feed shows its 4 articles
-PHASE0_REPEAT_ROUNDS times (default once).
+(default 10).
 
 The state of an article is shared by all its copies: if the participant
 opens it ("Read more" / "Read full article") or likes it on one copy, every
@@ -39,22 +39,22 @@ Interaction per article:
 
 The "Continue" / "Finish" button sits in a bar fixed at the bottom of the
 screen (always reachable, however far the participant scrolls). It unlocks
-only after MIN_FEED_SECONDS (default 2 minutes; PHASE0_MIN_SECONDS for the
-practice feed), but the countdown appears on it only during the last
-COUNTDOWN_VISIBLE_SECONDS, so the feed never looks like a timed task.
-Between two feeds a "loading the next feed" wait (BREAK_LOADING_SECONDS)
-runs before the participant can go on.
+only after MIN_FEED_SECONDS (default 2 minutes), but the countdown appears
+on it only during the last COUNTDOWN_VISIBLE_SECONDS, so the feed never
+looks like a timed task. Before each feed a "loading the feed" wait runs
+(FIRST_FEED_LOADING_SECONDS before feed 1, BREAK_LOADING_SECONDS before
+feed 2).
 
 Each card shows the headline that goes with the text version it displays:
 the `Title` column with the original text, the `LLM_title` column with the
 LLM-rewritten text (from the `LLM_text` column).
 
-Outlet logos: when the source is visible, each card shows the logo of its
-outlet at the top. The logos are image files in data/logos/, one per
-outlet, named after the outlet as written in the CSV `domain` column
-(e.g. data/logos/nytimes.com.png). PNG, SVG, JPG and WEBP are accepted.
-If a logo is missing, the app shows the exact file names it expects.
-LOGO_FILES can map an outlet to a different file name.
+Outlet logos: image files in data/logos/, one per outlet, named after the
+outlet: for the feed outlets as written in the CSV `domain` column, for the
+survey outlets as written in SURVEY_OUTLETS (e.g. data/logos/reuters.com.png).
+PNG, SVG, JPG and WEBP are accepted. If a logo is missing, the app shows the
+exact file names it expects. LOGO_FILES can map an outlet to a different
+file name.
 
 Prolific integration:
     - PROLIFIC_PID, STUDY_ID and SESSION_ID are read from the URL, so the
@@ -98,7 +98,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-10-29.1"
+APP_VERSION = "2026-11-04.1"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -124,8 +124,46 @@ LOGO_MAX_KB = 400
 # Logo height on the cards, in pixels (the width follows the image), and
 # corner rounding, in pixels (0 = square corners; half the height = pill /
 # circle for square logos). On phones the logo is shown at 80% of this size.
-LOGO_HEIGHT_PX = 80
-LOGO_RADIUS_PX = 16
+LOGO_HEIGHT_PX = 104
+LOGO_RADIUS_PX = 18
+# Logo height in the outlet survey (both steps) and in the intro, in pixels.
+SURVEY_LOGO_HEIGHT_PX = 96
+INTRO_LOGO_HEIGHT_PX = 64
+
+# ---- outlet survey (before the feeds) ----------------------------------------
+# The outlets shown in the survey: domain (also the logo file name, as for
+# the feed outlets), the name shown under the logo, and reference data that
+# goes into the saved rows only (never shown to the participant).
+# NewsGuard ratings from newsguard_22_02_24.csv (T = trustworthy,
+# N = not trustworthy, score 0-100, threshold 60).
+SURVEY_OUTLETS = [
+    {"domain": "bbc.com",         "name": "BBC",          "group": "feed",         "ng_rating": "T", "ng_score": 95.0},
+    {"domain": "cnn.com",         "name": "CNN",          "group": "feed",         "ng_rating": "T", "ng_score": 80.0},
+    {"domain": "theblaze.com",    "name": "TheBlaze",     "group": "feed",         "ng_rating": "N", "ng_score": 49.5},
+    {"domain": "rt.com",          "name": "RT",           "group": "feed",         "ng_rating": "N", "ng_score": 20.0},
+    {"domain": "reuters.com",     "name": "Reuters",      "group": "famous",       "ng_rating": "T", "ng_score": 100.0},
+    {"domain": "theguardian.com", "name": "The Guardian", "group": "famous",       "ng_rating": "T", "ng_score": 100.0},
+    {"domain": "infowars.com",    "name": "Infowars",     "group": "famous",       "ng_rating": "N", "ng_score": 7.5},
+    {"domain": "zerohedge.com",   "name": "ZeroHedge",    "group": "famous",       "ng_rating": "N", "ng_score": 15.0},
+    {"domain": "capegazette.com", "name": "Cape Gazette", "group": "lesser_known", "ng_rating": "T", "ng_score": 100.0},
+    {"domain": "mintpressnews.com", "name": "MintPress News", "group": "lesser_known", "ng_rating": "N", "ng_score": 22.5},
+]
+# True: the outlets appear in a random order, drawn independently for each
+# participant and for each step.
+SHUFFLE_SURVEY_OUTLETS = True
+
+FAMILIARITY_TITLE = "Do you know these news outlets?"
+FAMILIARITY_LEAD = ("For each outlet, tell us whether you know it. It's completely fine "
+                    "not to know some of them: just answer honestly.")
+FAMILIARITY_OPTIONS = [("yes", "I know it"), ("no", "I don't know it")]
+
+PREFERENCE_TITLE = "Would you like to see them in your feed?"
+PREFERENCE_LEAD = ("For each outlet you know, tell us how much you would like to come "
+                   "across its articles in your news feed.")
+# Likert scale: one value per point, with labels at the two ends and in the
+# middle (an odd number of points puts the middle label on the centre point).
+PREFERENCE_POINTS = 7
+PREFERENCE_ANCHORS = ("Definitely not", "Neutral", "Definitely yes")
 
 # CSV column names. For each field the app uses the first name it finds.
 # Edit these lists if your CSV uses different names.
@@ -148,11 +186,9 @@ REQUIRED_FIELDS = ("topic", "outlet", "title", "title_rewritten", "text", "text_
 
 ARTICLES_PER_CELL = 3      # articles per outlet per topic (3 topics x 4 outlets x 3 = 36)
 
-# Phase lengths. Phase 0 (practice) has PHASE0_ARTICLES, phase 1 has
-# PHASE1_ARTICLES and phase 2 all the others: 4 + 16 + 16 = 36.
-# With 4 outlets: 1 per outlet in phase 0, 4 per outlet in phases 1 and 2.
-PHASE0_ARTICLES = 4
-PHASE1_ARTICLES = 16
+# Phase lengths: phase 1 has PHASE1_ARTICLES and phase 2 all the others,
+# 18 + 18 = 36. With 4 outlets that is 4 or 5 articles per outlet per phase.
+PHASE1_ARTICLES = 18
 
 # Safety limit on how many candidate splits are checked at start-up.
 MAX_SPLIT_COMBOS = 2 ** 16
@@ -163,15 +199,13 @@ PREVIEW_CHARS = 144         # visible before "Read more"
 READMORE_CHARS = 500       # visible after "Read more" (total)
 
 # How many times the article sequence of a feed is repeated, one after the
-# other, so that the feed never seems to end (16 articles x 10 = 160 cards
-# in feeds 1 and 2). The practice feed has its own setting.
+# other, so that the feed never seems to end (18 articles x 10 = 180 cards
+# in each feed).
 REPEAT_ROUNDS = 10
-PHASE0_REPEAT_ROUNDS = 1
 
 # Minimum time on each feed before "Continue" / "Finish" can be clicked.
 # Set to 0 to disable (e.g. while testing).
 MIN_FEED_SECONDS = 120
-PHASE0_MIN_SECONDS = 30
 
 # How long before the unlock the countdown becomes visible on the button.
 # Until then the button just reads "Continue" / "Finish" (greyed out), so
@@ -179,8 +213,10 @@ PHASE0_MIN_SECONDS = 30
 # Set to 0 to never show the countdown.
 COUNTDOWN_VISIBLE_SECONDS = 10
 
-# Wait between two feeds: how long the "loading the next feed" screen
-# lasts before the participant can go on.
+# "Loading the feed" screen before each feed: how long it lasts before the
+# participant can go on. FIRST_FEED_LOADING_SECONDS comes after the outlet
+# survey, BREAK_LOADING_SECONDS between the two feeds.
+FIRST_FEED_LOADING_SECONDS = 3
 BREAK_LOADING_SECONDS = 10
 
 CONDITIONS = {
@@ -213,21 +249,24 @@ BLOCK_DUPLICATE_PID = True
 # missing from secrets.toml. Leave "" to rely on secrets only.
 PROLIFIC_COMPLETION_CODE = ""
 
-# New tab names (v4): the columns changed with the practice phase and the
-# logos, so the data go to fresh tabs instead of being mixed with v3 data.
-SHEET_ASSIGNMENTS = "assignments_v4"
-SHEET_SESSIONS = "sessions_v4"
-SHEET_RESPONSES = "responses_v4"
+# New tab names (v5): the practice phase is gone and the outlet survey is
+# new, so the data go to fresh tabs instead of being mixed with v4 data.
+SHEET_ASSIGNMENTS = "assignments_v5"
+SHEET_SESSIONS = "sessions_v5"
+SHEET_RESPONSES = "responses_v5"
+SHEET_OUTLETS = "outlets_v5"     # one row per participant x survey outlet
 
 ASSIGNMENT_HEADERS = ["session_id", "prolific_pid", "condition", "assigned_at_utc"]
 
 SESSION_HEADERS = [
     "session_id", "prolific_pid", "study_id", "prolific_session_id",
     "condition", "condition_label", "assignment_method",
-    "logo_files", "phase0_order", "phase1_order", "phase2_order", "article_split",
+    "logo_files", "phase1_order", "phase2_order", "article_split",
+    "familiarity_order", "preference_order", "n_outlets_known",
+    "familiarity_duration_ms", "preference_duration_ms",
     "opened_at_utc", "started_at_utc", "completed_at_utc",
     "duration_min", "n_articles", "n_readmore", "n_full", "n_likes",
-    "phase0_max_round", "phase1_max_round", "phase2_max_round",
+    "phase1_max_round", "phase2_max_round",
     "user_agent", "app_version",
 ]
 
@@ -242,6 +281,18 @@ RESPONSE_HEADERS = [
     "rounds_shown", "max_round_reached",
     "page_enter_ts", "page_exit_ts", "page_duration_ms", "page_duration_server_s",
     "year", "month", "rating",
+]
+
+OUTLET_HEADERS = [
+    "session_id", "prolific_pid", "condition", "condition_label",
+    "outlet", "outlet_name", "outlet_group", "in_feed", "newsguard_rating", "newsguard_score",
+    "logo_file",
+    "familiarity_position", "familiar", "familiarity_first_ms", "familiarity_last_ms",
+    "familiarity_changes",
+    "preference_shown", "preference_position", "preference", "preference_label",
+    "preference_first_ms", "preference_last_ms", "preference_changes",
+    "familiarity_enter_ts", "familiarity_exit_ts",
+    "preference_enter_ts", "preference_exit_ts",
 ]
 
 # =============================================================================
@@ -435,26 +486,22 @@ def balanced_counts(keys, sizes, outlet_class, n):
     return options, None
 
 
-def compute_split_options(articles, cells, topics, outlets, phase0_n, phase1_n):
-    """All the admissible ways to split the articles among the three phases.
+def compute_split_options(articles, cells, topics, outlets, phase1_n):
+    """All the admissible ways to split the articles between the two phases.
 
-    Step 1, phase 0: `phase0_n` articles taken from the whole set, balanced
-    (see balanced_counts). With 36 articles and phase0_n = 4: one article per
-    outlet; topics 2, 1, 1; two reliable and two unreliable; at most one
-    reliable and one unreliable per topic.
-
-    Step 2, phase 1: `phase1_n` articles taken, balanced, from what phase 0
-    left; phase 2 gets the rest. With phase1_n = 16: 4 per outlet in each of
-    phases 1 and 2, 8 reliable and 8 unreliable, topics split as evenly as
-    possible (e.g. 5/6 per topic) and the same for topic x reliability.
+    Phase 1 gets `phase1_n` articles taken, balanced, from the whole set (see
+    balanced_counts); phase 2 gets the rest, which is then balanced too.
+    With 36 articles and phase1_n = 18: 4 or 5 articles per outlet in each
+    phase, 6 per topic, 9 reliable and 9 unreliable, and 3 per topic x
+    reliability class.
 
     Returns (cell_keys, options, error). `cell_keys` lists the cells as
-    (topic, outlet); each option is a pair (phase0_counts, phase1_counts),
-    with one count per cell. Phase 2 gets size - phase0 - phase1 per cell."""
+    (topic, outlet); each option has one phase-1 count per cell. Phase 2 gets
+    size - phase1 per cell."""
     total = len(articles)
-    if not (0 < phase0_n and 0 < phase1_n and phase0_n + phase1_n < total):
-        return [], [], (f"PHASE0_ARTICLES + PHASE1_ARTICLES must be less than {total} "
-                        f"(found {phase0_n} + {phase1_n}).")
+    if not 0 < phase1_n < total:
+        return [], [], (f"PHASE1_ARTICLES must be between 1 and {total - 1} "
+                        f"(found {phase1_n}).")
 
     keys = [(t, o) for t in topics for o in outlets]
     sizes = [len(cells[t][o]) for t, o in keys]
@@ -469,21 +516,9 @@ def compute_split_options(articles, cells, topics, outlets, phase0_n, phase1_n):
                        and len(set(outlet_class.values())) > 1)
     oc = outlet_class if use_reliability else None
 
-    phase0_options, error = balanced_counts(keys, sizes, oc, phase0_n)
+    options, error = balanced_counts(keys, sizes, oc, phase1_n)
     if error:
-        return keys, [], f"Phase 0: {error} Change PHASE0_ARTICLES or the article set."
-
-    options = []
-    for p0 in phase0_options:
-        rest = [size - k for size, k in zip(sizes, p0)]
-        phase1_options, _ = balanced_counts(keys, rest, oc, phase1_n)
-        options.extend((p0, p1) for p1 in phase1_options)
-
-    if not options:
-        return keys, [], (f"No split puts {phase0_n} articles in phase 0 and {phase1_n} "
-                          f"in phase 1 while keeping outlets, topics and reliability "
-                          f"classes balanced. Change PHASE0_ARTICLES / PHASE1_ARTICLES "
-                          f"or the article set.")
+        return keys, [], (f"Phase 1: {error} Change PHASE1_ARTICLES or the article set.")
     return keys, options, None
 
 
@@ -676,13 +711,13 @@ def load_study_data(csv_path, mtime):
     split_cells, split_options = [], []
     if not errors:
         split_cells, split_options, split_error = compute_split_options(
-            articles, cells, topics, outlets, PHASE0_ARTICLES, PHASE1_ARTICLES)
+            articles, cells, topics, outlets, PHASE1_ARTICLES)
         if split_error:
             errors.append(split_error)
         else:
-            n2 = len(articles) - PHASE0_ARTICLES - PHASE1_ARTICLES
+            n2 = len(articles) - PHASE1_ARTICLES
             log(f"{len(split_options)} balanced phase splits available "
-                f"({PHASE0_ARTICLES} + {PHASE1_ARTICLES} + {n2} articles).")
+                f"({PHASE1_ARTICLES} + {n2} articles).")
 
     for w in warnings:
         log(f"WARNING: {w}")
@@ -893,7 +928,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   /* Source visible: the outlet logo sits at the top of the card. */
   .source { display: flex; align-items: center; height: var(--logo-h, 80px);
             margin: -4px 0 18px; padding: 0; }
-  .source img { display: block; height: 100%; width: auto; max-width: 420px;
+  .source img { display: block; height: 100%; width: auto; max-width: 480px;
                 object-fit: contain; object-position: left center;
                 border-radius: var(--logo-r, 16px); overflow: hidden; }
 
@@ -1441,6 +1476,403 @@ def _ensure_component_files():
 _ensure_component_files()
 feed_component = components.declare_component("news_feed", path=_COMPONENT_DIR)
 
+
+# ---- outlet survey component -------------------------------------------------
+# One page with a card per outlet (logo + name). Two modes:
+#   "familiarity": two choices per outlet (FAMILIARITY_OPTIONS);
+#   "preference":  a Likert scale per outlet (PREFERENCE_POINTS points).
+# "Continue" unlocks once every outlet has an answer; the component then
+# returns the answers, every change with its time, and the page timing.
+
+SURVEY_COMPONENT_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,500&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --canvas: #ECEEF1;
+    --surface: #FFFFFF;
+    --ink: #191C20;
+    --ink-2: #2E3238;
+    --ink-3: #5C626A;
+    --line: #D8DCE1;
+    --line-strong: #B9BEC5;
+    --warn: #A3361F;
+    --sans: "Schibsted Grotesk", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --serif: "Literata", Georgia, "Times New Roman", serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: transparent; color: var(--ink); }
+  body { font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  #root { padding: 2px 2px 10px; }
+
+  .step { font-size: 14px; font-weight: 500; color: var(--ink-3); margin: 0 0 14px;
+          font-variant-numeric: tabular-nums; }
+  h1 { font-weight: 700; font-size: 34px; line-height: 1.1; letter-spacing: -0.022em;
+       margin: 0 0 14px; text-wrap: balance; }
+  .lead { font-family: var(--serif); font-optical-sizing: auto; font-size: 18px;
+          line-height: 1.58; color: var(--ink-2); margin: 0 0 28px; max-width: 34em; }
+
+  .list { display: flex; flex-direction: column; gap: 12px; }
+  .item { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+          padding: 20px 24px; transition: border-color .2s, box-shadow .2s; }
+  .item.missing { border-color: var(--warn); box-shadow: 0 0 0 1px var(--warn); }
+
+  .ident { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-width: 0; }
+  /* Every logo gets the same height (small files are scaled up too) and
+     keeps its shape; only a logo too wide for the card is scaled down. */
+  .logo { height: var(--logo-h, 96px); width: 100%; display: flex; align-items: center; }
+  .logo img { display: block; height: 100%; width: auto; max-width: 100%;
+              object-fit: contain; object-position: left center;
+              border-radius: var(--logo-r, 18px); }
+  .name { font-weight: 600; font-size: 18px; line-height: 1.25; color: var(--ink); }
+
+  /* familiarity: identity on the left, the two choices on the right */
+  .item.binary { display: grid; grid-template-columns: minmax(0, 1fr) auto;
+                 align-items: center; gap: 18px 24px; }
+  .choices { display: flex; gap: 8px; }
+  .opt { appearance: none; height: 44px; padding: 0 18px; border-radius: 22px;
+         border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-2);
+         font: 500 15px/1 var(--sans); cursor: pointer; white-space: nowrap;
+         transition: background-color .15s, border-color .15s, color .15s; }
+  .opt:hover { border-color: var(--ink); color: var(--ink); }
+  .opt[aria-checked="true"] { background: var(--ink); border-color: var(--ink); color: #FFFFFF; }
+
+  /* preference: identity on top, the scale below at full width */
+  .scale { display: grid; grid-template-columns: repeat(var(--points, 7), minmax(0, 1fr));
+           gap: 6px; margin-top: 18px; }
+  .pt { appearance: none; height: 46px; padding: 0; border-radius: 10px;
+        border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-2);
+        font: 600 16px/1 var(--sans); cursor: pointer; font-variant-numeric: tabular-nums;
+        transition: background-color .15s, border-color .15s, color .15s; }
+  .pt:hover { border-color: var(--ink); color: var(--ink); }
+  .pt[aria-checked="true"] { background: var(--ink); border-color: var(--ink); color: #FFFFFF; }
+  .anchors { display: grid; grid-template-columns: repeat(var(--points, 7), minmax(0, 1fr));
+             gap: 6px; margin-top: 8px; font-size: 13px; line-height: 1.3; color: var(--ink-3); }
+  .anchors .a-left { text-align: left; }
+  .anchors .a-mid { text-align: center; }
+  .anchors .a-right { text-align: right; }
+
+  .actions { display: flex; flex-direction: column; align-items: center; gap: 10px;
+             margin: 30px 0 8px; }
+  .count { margin: 0; font-size: 14px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .count.warn { color: var(--warn); font-weight: 500; }
+  .next { appearance: none; border: 0; height: 48px; padding: 0 30px; border-radius: 24px;
+          background: var(--ink); color: #FFFFFF; font: 600 16px/1 var(--sans); cursor: pointer;
+          min-width: 215px; transition: background-color .15s; }
+  .next[aria-disabled="true"] { background: #8B9097; cursor: default; }
+
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+
+  @media (max-width: 560px) {
+    h1 { font-size: 28px; }
+    .lead { font-size: 17px; }
+    .item { padding: 18px 18px; }
+    .logo { height: calc(var(--logo-h, 96px) * 0.8); }
+    .logo img { border-radius: calc(var(--logo-r, 18px) * 0.8); }
+    .item.binary { grid-template-columns: 1fr; }
+    .choices .opt { flex: 1; padding: 0 10px; }
+    .pt { height: 44px; font-size: 15px; border-radius: 8px; }
+    .scale, .anchors { gap: 4px; }
+    .anchors { font-size: 12px; }
+    .actions { align-items: stretch; }
+    .next { width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(function () {
+  "use strict";
+
+  var root = document.getElementById("root");
+  var state = null;
+  var currentPage = null;
+  var lastHeight = -1;
+
+  function send(type, data) {
+    var msg = { isStreamlitMessage: true, type: type };
+    if (data) { for (var k in data) { msg[k] = data[k]; } }
+    window.parent.postMessage(msg, "*");
+  }
+  function updateHeight() {
+    var h = Math.ceil(root.getBoundingClientRect().height) + 4;
+    if (h !== lastHeight) { lastHeight = h; send("streamlit:setFrameHeight", { height: h }); }
+  }
+  if (window.ResizeObserver) { new ResizeObserver(updateHeight).observe(root); }
+  window.addEventListener("resize", updateHeight);
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = text;
+    return e;
+  }
+  function ms() { return Math.round(performance.now() - state.t0); }
+  function iso() { return new Date().toISOString(); }
+
+  function scrollParentToTop() {
+    try {
+      var d = window.parent.document;
+      var sel = ['[data-testid="stMain"]', '[data-testid="stAppViewContainer"]', 'section.main', '.main'];
+      for (var i = 0; i < sel.length; i++) { var n = d.querySelector(sel[i]); if (n) n.scrollTop = 0; }
+      if (d.scrollingElement) d.scrollingElement.scrollTop = 0;
+      window.parent.scrollTo(0, 0);
+    } catch (err) { /* ignore */ }
+  }
+  function installLeaveGuard() {
+    try {
+      var w = window.parent;
+      if (w.__npsLeaveGuard) return;
+      w.__npsLeaveGuard = new w.Function("e", "e.preventDefault(); e.returnValue = ''; return '';");
+      w.addEventListener("beforeunload", w.__npsLeaveGuard);
+    } catch (err) { /* ignore */ }
+  }
+
+  // A logo too wide for its box at full height is drawn smaller, at its
+  // own proportions (no empty bands, the rounded corners stay on the image).
+  function fitLogo(img) {
+    var box = img.parentNode;
+    if (!box || !img.naturalWidth || !img.naturalHeight) return;
+    var fullW = img.naturalWidth / img.naturalHeight * box.clientHeight;
+    var tooWide = fullW > box.clientWidth + 0.5;
+    img.style.height = tooWide ? "auto" : "";
+    img.style.width = tooWide ? "100%" : "";
+  }
+  window.addEventListener("resize", function () {
+    if (state && state.logoImgs) state.logoImgs.forEach(fitLogo);
+  });
+
+  function answered() {
+    var n = 0;
+    for (var i = 0; i < state.items.length; i++) {
+      if (state.answers[state.items[i].key] !== undefined) n++;
+    }
+    return n;
+  }
+
+  function refresh() {
+    var n = answered(), total = state.items.length, done = n === total;
+    state.next.setAttribute("aria-disabled", done ? "false" : "true");
+    if (done) {
+      state.count.textContent = "All " + total + " answered";
+      state.count.classList.remove("warn");
+    } else if (!state.count.classList.contains("warn")) {
+      state.count.textContent = n + " of " + total + " answered";
+    }
+  }
+
+  // A radio group of buttons: one choice per outlet, changeable at any time.
+  function choose(item, value, buttons) {
+    if (state.submitted) return;
+    state.answers[item.key] = value;
+    state.history.push({ key: item.key, value: value, ms: ms() });
+    for (var i = 0; i < buttons.length; i++) {
+      var on = buttons[i].__value === value;
+      buttons[i].setAttribute("aria-checked", on ? "true" : "false");
+      buttons[i].tabIndex = on ? 0 : -1;
+    }
+    item.card.classList.remove("missing");
+    if (state.count.classList.contains("warn")) {
+      state.count.classList.remove("warn");
+    }
+    refresh();
+  }
+
+  function buildGroup(item, container, options, cls, ariaLabel) {
+    container.setAttribute("role", "radiogroup");
+    container.setAttribute("aria-label", ariaLabel);
+    var buttons = [];
+    options.forEach(function (opt, i) {
+      var b = el("button", cls, opt.label);
+      b.type = "button";
+      b.__value = opt.value;
+      b.setAttribute("role", "radio");
+      b.setAttribute("aria-checked", "false");
+      if (opt.aria) b.setAttribute("aria-label", opt.aria);
+      b.tabIndex = i === 0 ? 0 : -1;
+      b.addEventListener("click", function () { choose(item, opt.value, buttons); });
+      b.addEventListener("keydown", function (e) {
+        var step = (e.key === "ArrowRight" || e.key === "ArrowDown") ? 1
+                 : (e.key === "ArrowLeft" || e.key === "ArrowUp") ? -1 : 0;
+        if (!step) return;
+        e.preventDefault();
+        var j = (i + step + buttons.length) % buttons.length;
+        buttons[j].focus();
+        choose(item, buttons[j].__value, buttons);
+      });
+      buttons.push(b);
+      container.appendChild(b);
+    });
+    return buttons;
+  }
+
+  function buildItem(item) {
+    var card = el("div", "item");
+    item.card = card;
+    var ident = el("div", "ident");
+    if (item.logo) {
+      var box = el("div", "logo");
+      var img = el("img");
+      img.src = item.logo;
+      img.alt = "";
+      img.decoding = "async";
+      img.draggable = false;
+      img.addEventListener("load", function () { fitLogo(img); updateHeight(); });
+      state.logoImgs.push(img);
+      box.appendChild(img);
+      ident.appendChild(box);
+    }
+    ident.appendChild(el("div", "name", item.name));
+    card.appendChild(ident);
+
+    if (state.mode === "familiarity") {
+      card.classList.add("binary");
+      var choices = el("div", "choices");
+      buildGroup(item, choices, state.options, "opt", "Do you know " + item.name + "?");
+      card.appendChild(choices);
+    } else {
+      var scale = el("div", "scale");
+      var pts = state.options.map(function (o) {
+        return { value: o.value, label: String(o.value), aria: o.label };
+      });
+      buildGroup(item, scale, pts, "pt", item.name + ": " + state.question);
+      card.appendChild(scale);
+      var anchors = el("div", "anchors");
+      anchors.setAttribute("aria-hidden", "true");
+      // End labels under the first / last points, the middle one centred
+      // under the centre point (odd scales only), never overlapping.
+      var n = state.options.length;
+      var hasMid = n % 2 === 1 && n >= 3 && !!state.anchors[1];
+      var side = hasMid ? Math.max(1, (n - 3) / 2) : Math.max(1, Math.floor(n / 2));
+      var left = el("span", "a-left", state.anchors[0] || "");
+      left.style.gridColumn = "1 / span " + side;
+      anchors.appendChild(left);
+      if (hasMid) {
+        var mid = el("span", "a-mid", state.anchors[1]);
+        mid.style.gridColumn = (side + 1) + " / span " + (n - 2 * side);
+        anchors.appendChild(mid);
+      }
+      var right = el("span", "a-right", state.anchors[2] || "");
+      right.style.gridColumn = (n - side + 1) + " / span " + side;
+      anchors.appendChild(right);
+      card.appendChild(anchors);
+    }
+    return card;
+  }
+
+  function buildPage(args) {
+    state = {
+      t0: performance.now(), enterTs: iso(), submitted: false,
+      mode: args.mode, question: args.question || "",
+      options: args.options || [], anchors: args.anchors || [],
+      items: (args.items || []).map(function (it) {
+        return { key: String(it.key), name: it.name || "", logo: it.logo || null };
+      }),
+      answers: {}, history: [], logoImgs: []
+    };
+    root.textContent = "";
+    if (args.logo_height) root.style.setProperty("--logo-h", args.logo_height + "px");
+    if (typeof args.logo_radius === "number") root.style.setProperty("--logo-r", args.logo_radius + "px");
+    root.style.setProperty("--points", String(Math.max(1, state.options.length)));
+
+    if (args.step_label) root.appendChild(el("p", "step", args.step_label));
+    root.appendChild(el("h1", null, args.title || ""));
+    if (args.lead) root.appendChild(el("p", "lead", args.lead));
+
+    var list = el("div", "list");
+    state.items.forEach(function (item) { list.appendChild(buildItem(item)); });
+    root.appendChild(list);
+
+    var actions = el("div", "actions");
+    state.count = el("p", "count");
+    state.count.setAttribute("aria-live", "polite");
+    state.next = el("button", "next", args.button_label || "Continue");
+    state.next.type = "button";
+    state.next.addEventListener("click", submit);
+    actions.appendChild(state.count);
+    actions.appendChild(state.next);
+    root.appendChild(actions);
+
+    refresh();
+    if (args.warn_on_leave) installLeaveGuard();
+    scrollParentToTop();
+    updateHeight();
+  }
+
+  function submit() {
+    if (state.submitted) return;
+    var missing = state.items.filter(function (it) { return state.answers[it.key] === undefined; });
+    if (missing.length) {
+      // Point to the first outlet still without an answer.
+      missing.forEach(function (it) { it.card.classList.add("missing"); });
+      state.count.textContent = missing.length === 1
+        ? "Please answer for 1 more outlet."
+        : "Please answer for " + missing.length + " more outlets.";
+      state.count.classList.add("warn");
+      try { missing[0].card.scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) {}
+      return;
+    }
+    state.submitted = true;
+    state.next.setAttribute("aria-disabled", "true");
+    state.next.textContent = "One moment…";
+    send("streamlit:setComponentValue", { dataType: "json", value: {
+      page_id: currentPage,
+      mode: state.mode,
+      enter_ts: state.enterTs,
+      exit_ts: iso(),
+      duration_ms: ms(),
+      order: state.items.map(function (it) { return it.key; }),
+      answers: state.answers,
+      history: state.history
+    } });
+  }
+
+  window.addEventListener("message", function (event) {
+    var d = event.data;
+    if (!d || d.type !== "streamlit:render") return;
+    var args = d.args || {};
+    if (args.page_id && args.page_id !== currentPage) {
+      currentPage = args.page_id;
+      buildPage(args);
+    } else {
+      updateHeight();
+    }
+  });
+  send("streamlit:componentReady", { apiVersion: 1 });
+})();
+</script>
+</body>
+</html>
+"""
+
+_SURVEY_COMPONENT_DIR = os.path.join(
+    tempfile.gettempdir(),
+    "nps_survey_" + hashlib.sha1(SURVEY_COMPONENT_HTML.encode("utf-8")).hexdigest()[:12],
+)
+
+
+def _ensure_survey_component_files():
+    path = os.path.join(_SURVEY_COMPONENT_DIR, "index.html")
+    if not os.path.exists(path):
+        os.makedirs(_SURVEY_COMPONENT_DIR, exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{_rng.randint(0, 10**9)}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(SURVEY_COMPONENT_HTML)
+        os.replace(tmp, path)
+
+
+_ensure_survey_component_files()
+survey_component = components.declare_component("outlet_survey", path=_SURVEY_COMPONENT_DIR)
+
 # =============================================================================
 # 7. PAGE STYLE
 # =============================================================================
@@ -1496,10 +1928,12 @@ li.nps-row::marker { content: none; }
 .nps-row p { margin: 0; font-size: 16px; line-height: 1.55; color: var(--ink-2); }
 .nps-row b { color: var(--ink); font-weight: 600; }
 .nps-token { display: flex; align-items: center; justify-content: flex-start; }
-.tok-logos { display: grid !important; grid-template-columns: repeat(2, auto);
-             gap: 10px 10px; justify-content: start; align-items: center; }
-.tok-logos img { display: block; height: auto; width: auto; max-height: 40px; max-width: 95px;
-                 border-radius: 8px; }
+/* Logos row: the logos get the full width, the text goes below them. */
+li.nps-row.nps-row-logos { grid-template-columns: 1fr; gap: 14px; }
+.tok-logos { display: flex !important; flex-wrap: wrap; gap: 12px 14px;
+             justify-content: flex-start; align-items: center; }
+.tok-logos img { display: block; height: var(--intro-logo-h, 64px); width: auto; max-width: 100%;
+                 object-fit: contain; border-radius: 12px; }
 .tok-more {
   font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: underline;
   text-decoration-thickness: 1.5px; text-decoration-color: var(--line-strong);
@@ -1599,6 +2033,7 @@ body:has(#nps-feedbar) .block-container { padding-bottom: 160px !important; }
   .nps-title { font-size: 34px; }
   .nps-lead { font-size: 18px; }
   li.nps-row { grid-template-columns: 1fr; gap: 10px; }
+  .tok-logos img { height: calc(var(--intro-logo-h, 64px) * 0.8); }
   .nps-code { padding: 20px 18px 16px; }
   .nps-feedbar-inner { padding: 0; }
   .nps-feedbar-btn { width: 100%; }
@@ -1645,12 +2080,17 @@ def init_session():
         "condition": None,
         "assignment_method": None,
         "logo_files": {},
+        "survey_items": [],
+        "familiarity_result": None,
+        "preference_result": None,
+        "preference_items": None,
         "article_order": {},
         "split": {},
         "pages": [],
         "page_idx": 0,
         "processed": [],
         "page_server_start": {},
+        "first_feed_shown": False,
         "break_ready": False,
         "responses": [],
         "save_status": None,
@@ -1658,30 +2098,67 @@ def init_session():
     })
 
 
+def preference_options():
+    """[(value, label), ...] for the Likert scale: 1..PREFERENCE_POINTS, the
+    ends and the centre labelled with PREFERENCE_ANCHORS."""
+    n = PREFERENCE_POINTS
+    left, mid, right = (list(PREFERENCE_ANCHORS) + ["", "", ""])[:3]
+    out = []
+    for v in range(1, n + 1):
+        if v == 1:
+            label = left
+        elif v == n:
+            label = right
+        elif n % 2 == 1 and v == (n + 1) // 2:
+            label = mid
+        else:
+            label = ""
+        out.append((v, f"{v} ({label})" if label else str(v)))
+    return out
+
+
+def survey_outlets(data):
+    """The survey outlets as dicts with their logo, plus whether each one
+    also appears in the feeds."""
+    feed_keys = {_logo_key(o) for o in data["outlets"]}
+    out = []
+    for i, o in enumerate(SURVEY_OUTLETS):
+        domain = o["domain"]
+        out.append({
+            "key": f"o{i + 1}",
+            "domain": domain,
+            "name": o.get("name") or domain,
+            "group": o.get("group"),
+            "ng_rating": o.get("ng_rating"),
+            "ng_score": o.get("ng_score"),
+            "in_feed": _logo_key(domain) in feed_keys,
+            "logo_file": (data["logos"].get(domain) or {}).get("file"),
+        })
+    return out
+
+
 def start_study(data):
-    """Randomise everything for this participant and build the three feeds."""
+    """Randomise everything for this participant: condition, phase split,
+    feed orders and the order of the survey outlets."""
     ss = st.session_state
     topics, outlets = list(data["topics"]), list(data["outlets"])
 
     # Phase split: one of the balanced splits (see compute_split_options),
     # drawn at random for this participant. It says how many articles of each
-    # topic x outlet cell go to phases 0 and 1 (phase 2 gets the rest); which
-    # ones is random as well.
-    # Default: phase 0 = 4 articles (1 per outlet), phases 1 and 2 = 16 each
-    # (4 per outlet).
-    counts0, counts1 = _rng.choice(data["split_options"])
-    split = {ph: {t: [] for t in topics} for ph in ("0", "1", "2")}
-    for (t, o), k0, k1 in zip(data["split_cells"], counts0, counts1):
+    # topic x outlet cell go to phase 1 (phase 2 gets the rest); which ones
+    # is random as well. Default: 18 + 18 articles, 4 or 5 per outlet.
+    counts1 = _rng.choice(data["split_options"])
+    split = {ph: {t: [] for t in topics} for ph in ("1", "2")}
+    for (t, o), k1 in zip(data["split_cells"], counts1):
         uids = list(data["cells"][t][o])
         _rng.shuffle(uids)
-        split["0"][t].extend(uids[:k0])
-        split["1"][t].extend(uids[k0:k0 + k1])
-        split["2"][t].extend(uids[k0 + k1:])
+        split["1"][t].extend(uids[:k1])
+        split["2"][t].extend(uids[k1:])
 
     # One feed per phase with all its articles; the order mixes topics and
     # outlets and is drawn independently for each phase.
     order = {}
-    for phase in ("0", "1", "2"):
+    for phase in ("1", "2"):
         uids = [u for t in topics for u in split[phase][t]]
         _rng.shuffle(uids)
         order[phase] = uids
@@ -1690,8 +2167,8 @@ def start_study(data):
     cond = CONDITIONS[condition]
 
     pages = []
-    for number, phase in enumerate(("0", "1", "2"), start=1):
-        if phase in ("0", "1"):
+    for number, phase in enumerate(("1", "2"), start=1):
+        if phase == "1":
             visible, version = True, "original"
         else:
             visible = cond["source_visible"]
@@ -1700,19 +2177,24 @@ def start_study(data):
             "page_number": number, "phase": int(phase),
             "source_visible": visible, "text_version": version,
             "articles": order[phase],
-            "repeat_rounds": PHASE0_REPEAT_ROUNDS if phase == "0" else REPEAT_ROUNDS,
-            "min_seconds": PHASE0_MIN_SECONDS if phase == "0" else MIN_FEED_SECONDS,
+            "repeat_rounds": REPEAT_ROUNDS,
+            "min_seconds": MIN_FEED_SECONDS,
         })
+
+    items = survey_outlets(data)
+    if SHUFFLE_SURVEY_OUTLETS:
+        _rng.shuffle(items)
 
     logo_files = {o: data["logos"][o]["file"] for o in outlets}
 
     ss.update({
         "condition": condition, "assignment_method": method, "logo_files": logo_files,
+        "survey_items": items,
         "split": split, "article_order": order, "pages": pages, "page_idx": 0,
-        "stage": "feed", "started_at": utc_iso(), "started_ts": time.time(),
+        "stage": "familiarity", "started_at": utc_iso(), "started_ts": time.time(),
     })
     log(f"session {ss.session_id} started: condition {condition} ({method}), "
-        f"{len(order['0'])} + {len(order['1'])} + {len(order['2'])} articles")
+        f"{len(order['1'])} + {len(order['2'])} articles")
 
 
 def record_page(data, page, page_id, result, cards):
@@ -1772,6 +2254,8 @@ def build_session_row():
     ss = st.session_state
     resp = ss.responses
     duration = round((time.time() - ss.started_ts) / 60, 2) if ss.started_ts else None
+    fam, pref = ss.familiarity_result, ss.preference_result
+    domains = {it["key"]: it["domain"] for it in ss.survey_items}
 
     def max_round(phase):
         rows = [r for r in resp if r["phase"] == phase]
@@ -1786,10 +2270,14 @@ def build_session_row():
         "condition_label": CONDITIONS[ss.condition]["label"],
         "assignment_method": ss.assignment_method,
         "logo_files": json.dumps(ss.logo_files),
-        "phase0_order": json.dumps(ss.article_order.get("0", [])),
         "phase1_order": json.dumps(ss.article_order.get("1", [])),
         "phase2_order": json.dumps(ss.article_order.get("2", [])),
         "article_split": json.dumps(ss.split),
+        "familiarity_order": json.dumps([domains.get(k, k) for k in (fam or {}).get("order", [])]),
+        "preference_order": json.dumps([domains.get(k, k) for k in (pref or {}).get("order", [])]),
+        "n_outlets_known": sum(1 for v in ((fam or {}).get("answers") or {}).values() if v == "yes"),
+        "familiarity_duration_ms": (fam or {}).get("duration_ms"),
+        "preference_duration_ms": (pref or {}).get("duration_ms"),
         "opened_at_utc": ss.opened_at,
         "started_at_utc": ss.started_at,
         "completed_at_utc": ss.completed_at,
@@ -1798,12 +2286,65 @@ def build_session_row():
         "n_readmore": sum(1 for r in resp if r["readmore_clicked"]),
         "n_full": sum(1 for r in resp if r["full_clicked"]),
         "n_likes": sum(1 for r in resp if r["liked_final"]),
-        "phase0_max_round": max_round(0),
         "phase1_max_round": max_round(1),
         "phase2_max_round": max_round(2),
         "user_agent": ss.user_agent,
         "app_version": APP_VERSION,
     }
+
+
+def _answer_stats(result, key):
+    """(first_ms, last_ms, n_changes) of the answers given to one outlet."""
+    times = [h.get("ms") for h in ((result or {}).get("history") or []) if h.get("key") == key]
+    if not times:
+        return None, None, 0
+    return times[0], times[-1], len(times) - 1
+
+
+def build_outlet_rows():
+    """One row per survey outlet: familiarity and, if known, preference."""
+    ss = st.session_state
+    fam = ss.familiarity_result or {}
+    pref = ss.preference_result or {}
+    fam_pos = {k: i + 1 for i, k in enumerate(fam.get("order") or [])}
+    pref_pos = {k: i + 1 for i, k in enumerate(pref.get("order") or [])}
+    labels = dict(preference_options())
+    rows = []
+    for it in sorted(ss.survey_items, key=lambda x: fam_pos.get(x["key"], 999)):
+        k = it["key"]
+        f_first, f_last, f_changes = _answer_stats(fam, k)
+        p_first, p_last, p_changes = _answer_stats(pref, k)
+        value = (pref.get("answers") or {}).get(k)
+        rows.append({
+            "session_id": ss.session_id,
+            "prolific_pid": ss.prolific_pid,
+            "condition": ss.condition,
+            "condition_label": CONDITIONS[ss.condition]["label"],
+            "outlet": it["domain"],
+            "outlet_name": it["name"],
+            "outlet_group": it["group"],
+            "in_feed": it["in_feed"],
+            "newsguard_rating": it["ng_rating"],
+            "newsguard_score": it["ng_score"],
+            "logo_file": it.get("logo_file"),
+            "familiarity_position": fam_pos.get(k),
+            "familiar": (fam.get("answers") or {}).get(k),
+            "familiarity_first_ms": f_first,
+            "familiarity_last_ms": f_last,
+            "familiarity_changes": f_changes,
+            "preference_shown": k in pref_pos,
+            "preference_position": pref_pos.get(k),
+            "preference": value,
+            "preference_label": labels.get(value),
+            "preference_first_ms": p_first,
+            "preference_last_ms": p_last,
+            "preference_changes": p_changes,
+            "familiarity_enter_ts": fam.get("enter_ts"),
+            "familiarity_exit_ts": fam.get("exit_ts"),
+            "preference_enter_ts": pref.get("enter_ts"),
+            "preference_exit_ts": pref.get("exit_ts"),
+        })
+    return rows
 
 
 def save_results():
@@ -1812,12 +2353,16 @@ def save_results():
     ss = st.session_state
     session_row = build_session_row()
     response_rows = [[cell(r.get(h)) for h in RESPONSE_HEADERS] for r in ss.responses]
+    outlet_dicts = build_outlet_rows()
+    outlet_rows = [[cell(r.get(h)) for h in OUTLET_HEADERS] for r in outlet_dicts]
     session_values = [cell(session_row.get(h)) for h in SESSION_HEADERS]
 
     try:
         os.makedirs(LOCAL_BACKUP_DIR, exist_ok=True)
         pd.DataFrame(ss.responses, columns=RESPONSE_HEADERS).to_csv(
             os.path.join(LOCAL_BACKUP_DIR, f"{ss.session_id}_responses.csv"), index=False)
+        pd.DataFrame(outlet_dicts, columns=OUTLET_HEADERS).to_csv(
+            os.path.join(LOCAL_BACKUP_DIR, f"{ss.session_id}_outlets.csv"), index=False)
         with open(os.path.join(LOCAL_BACKUP_DIR, f"{ss.session_id}_session.json"), "w",
                   encoding="utf-8") as f:
             json.dump(session_row, f, indent=2, ensure_ascii=False)
@@ -1834,6 +2379,9 @@ def save_results():
             if "responses" not in ss.saved_parts:
                 store.append(SHEET_RESPONSES, RESPONSE_HEADERS, response_rows)
                 ss.saved_parts.append("responses")
+            if "outlets" not in ss.saved_parts:
+                store.append(SHEET_OUTLETS, OUTLET_HEADERS, outlet_rows)
+                ss.saved_parts.append("outlets")
             if "session" not in ss.saved_parts:
                 store.append(SHEET_SESSIONS, SESSION_HEADERS, [session_values])
                 ss.saved_parts.append("session")
@@ -1890,9 +2438,9 @@ def render_intro(data):
     else:
         wait_note = ""
     st.html(f"""
-<section class="nps-intro">
+<section class="nps-intro" style="--intro-logo-h: {INTRO_LOGO_HEIGHT_PX}px">
   <h1 class="nps-title">News Perception Study</h1>
-  <p class="nps-lead">You'll start with a short practice feed of a few articles, to get used to how it works. Then you'll browse {number_word(n_feeds)} news feeds, one after the other. Each one is a stream of real news articles from different outlets, and you can scroll through it for as long as you like.</p>
+  <p class="nps-lead">You'll start with a few quick questions about some news outlets. Then you'll browse {number_word(n_feeds)} news feeds, one after the other. Each one is a stream of real news articles from different outlets, and you can scroll through it for as long as you like.</p>
   <p class="nps-lead">The articles are there to be used, not just looked at: open the ones that catch your eye, read as much or as little of them as you want, and like the ones you enjoy. Browse them the way you'd browse news online.</p>
   <p class="nps-sub">It takes about {ESTIMATED_MINUTES} minutes. Please finish in one sitting and don't refresh the page.</p>
 
@@ -1902,7 +2450,7 @@ def render_intro(data):
       <div class="nps-token"><span class="tok-more">…&nbsp;Read more</span></div>
       <p>Each article opens with a short preview. Click <b>Read more</b> to keep reading. After that, <b>Read full article</b> shows the whole text.</p>
     </li>
-    <li class="nps-row">
+    <li class="nps-row nps-row-logos">
       <div class="nps-token tok-logos">{logos}</div>
       <p>The logo at the top of each article shows which news outlet published it.</p>
     </li>
@@ -1923,6 +2471,61 @@ def render_intro(data):
         st.rerun()
 
 
+def render_survey(data, mode):
+    """Outlet survey: mode "familiarity" (all outlets) or "preference" (only
+    the outlets the participant knows)."""
+    ss = st.session_state
+    page_id = f"{ss.session_id}-{mode}"
+    if mode == "familiarity":
+        items = ss.survey_items
+        options = [{"value": v, "label": l} for v, l in FAMILIARITY_OPTIONS]
+        title, lead, step = FAMILIARITY_TITLE, FAMILIARITY_LEAD, "News outlets · 1 of 2"
+    else:
+        known = {k for k, v in ss.familiarity_result["answers"].items() if v == "yes"}
+        items = [it for it in ss.survey_items if it["key"] in known]
+        if SHUFFLE_SURVEY_OUTLETS:
+            # A new order for this step, kept across reruns.
+            if ss.preference_items is None:
+                ss.preference_items = _rng.sample(items, len(items))
+            items = ss.preference_items
+        options = [{"value": v, "label": l} for v, l in preference_options()]
+        title, lead, step = PREFERENCE_TITLE, PREFERENCE_LEAD, "News outlets · 2 of 2"
+
+    result = survey_component(
+        page_id=page_id,
+        mode=mode,
+        step_label=step,
+        title=title,
+        lead=lead,
+        question=PREFERENCE_TITLE,
+        options=options,
+        anchors=list(PREFERENCE_ANCHORS),
+        items=[{"key": it["key"], "name": it["name"],
+                "logo": data["logos"][it["domain"]]["src"]} for it in items],
+        logo_height=SURVEY_LOGO_HEIGHT_PX,
+        logo_radius=LOGO_RADIUS_PX,
+        button_label="Continue",
+        warn_on_leave=WARN_ON_LEAVE,
+        key=f"survey-{page_id}",
+        default=None,
+    )
+
+    if not (isinstance(result, dict) and result.get("page_id") == page_id
+            and page_id not in ss.processed):
+        return
+    ss.processed.append(page_id)
+    if mode == "familiarity":
+        ss.familiarity_result = result
+        n_known = sum(1 for v in (result.get("answers") or {}).values() if v == "yes")
+        # Nobody to rate: straight on to the first feed.
+        ss.stage = "preference" if n_known else "break"
+    else:
+        ss.preference_result = result
+        ss.stage = "break"
+    ss.break_ready = False
+    st.rerun()
+
+
 def render_feed(data):
     ss = st.session_state
     page = ss.pages[ss.page_idx]
@@ -1934,11 +2537,7 @@ def render_feed(data):
     logo_keys = {o: f"L{i + 1}" for i, o in enumerate(data["outlets"])}
     logos = ({logo_keys[o]: {"src": data["logos"][o]["src"], "alt": o} for o in data["outlets"]}
              if page["source_visible"] else {})
-    if page["phase"] == 0:
-        progress_label = "Practice feed"
-    else:
-        n_main = sum(1 for p in ss.pages if p["phase"] > 0)
-        progress_label = f"Feed {page['phase']} of {n_main}"
+    progress_label = f"Feed {page['phase']} of {len(ss.pages)}"
     cards = []
     for uid in page["articles"]:
         art = data["articles"][uid]
@@ -1987,17 +2586,20 @@ def render_feed(data):
 
 
 def render_break():
-    """Pause between two feeds, framed only as loading: the participant is
-    never told to take a break. The pause length can be computed from the
-    data as page_enter_ts (next feed) - page_exit_ts (previous feed)."""
+    """"Loading the feed" screen before each feed, framed only as loading: the
+    participant is never told to take a break. Before the first feed it also
+    recalls how the feed works (the intro was a few screens ago). The pause
+    length can be computed from the data as page_enter_ts of the feed minus
+    the exit time of the screen before it."""
     ss = st.session_state
     slot = st.empty()
 
     upcoming = ss.pages[ss.page_idx]["phase"]
+    first = ss.page_idx == 0
     ordinal = {1: "first", 2: "second", 3: "third"}.get(upcoming, "next")
-    same_as = "the practice feed" if upcoming == 1 else "the first"
+    wait = FIRST_FEED_LOADING_SECONDS if first else BREAK_LOADING_SECONDS
 
-    if not ss.break_ready and BREAK_LOADING_SECONDS > 0:
+    if not ss.break_ready and wait > 0:
         slot.html(f"""
 <section class="nps-wait">
   <div class="nps-loading" role="status">
@@ -2006,15 +2608,21 @@ def render_break():
   </div>
   <p class="nps-sub">Please don't refresh or close this page.</p>
 </section>""")
-        time.sleep(BREAK_LOADING_SECONDS)
+        time.sleep(wait)
     ss.break_ready = True
 
+    if first:
+        note = ("Browse it the way you'd browse news online: open the articles that catch "
+                "your eye with <b>Read more</b>, like the ones you enjoy, and click "
+                "<b>Continue</b> at the bottom of the screen when you want to move on.")
+    else:
+        note = "It works the same way as the first."
     slot.html(f"""
 <section class="nps-wait">
   <div class="nps-loading">
     <span>The {ordinal} feed is ready.</span>
   </div>
-  <p class="nps-sub">It works the same way as {same_as}. Please don't refresh or close this page.</p>
+  <p class="nps-sub">{note} Please don't refresh or close this page.</p>
 </section>""")
 
     if st.button("Continue", type="primary", key=f"break_button_{ss.page_idx}"):
@@ -2096,7 +2704,9 @@ def main():
         render_setup_error(errors)
         return
 
-    logos, missing = load_logos(tuple(data["outlets"]), _logo_index())
+    logo_outlets = list(data["outlets"]) + [o["domain"] for o in SURVEY_OUTLETS
+                                            if o["domain"] not in data["outlets"]]
+    logos, missing = load_logos(tuple(logo_outlets), _logo_index())
     if missing:
         render_setup_error(
             [f"No logo for outlet '{o}': add the file data/logos/{logo_hint(o)} "
@@ -2107,6 +2717,8 @@ def main():
 
     if stage == "intro":
         render_intro(data)
+    elif stage in ("familiarity", "preference"):
+        render_survey(data, stage)
     elif stage == "feed":
         render_feed(data)
     elif stage == "break":

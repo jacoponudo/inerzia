@@ -1,0 +1,37 @@
+                               GEE Regression Results                              
+===================================================================================
+Dep. Variable:                           y   No. Observations:                 3360
+Model:                                 GEE   No. clusters:                      105
+Method:                        Generalized   Min. cluster size:                  32
+                      Estimating Equations   Max. cluster size:                  32
+Family:                           Binomial   Mean cluster size:                32.0
+Dependence structure:         Exchangeable   Num. iterations:                     2
+Date:                     Fri, 30 Oct 2026   Scale:                           1.000
+Covariance type:                    robust   Time:                         18:15:20
+=============================================================================================
+                                coef    std err          z      P>|z|      [0.025      0.975]
+---------------------------------------------------------------------------------------------
+Intercept                    -0.4473      0.242     -1.848      0.065      -0.922       0.027
+C(condition)[T.2]            -0.3512      0.352     -0.997      0.319      -1.041       0.339
+C(condition)[T.3]            -0.3189      0.367     -0.869      0.385      -1.038       0.400
+C(condition)[T.4]            -0.3065      0.329     -0.931      0.352      -0.951       0.339
+rel                           0.2668      0.166      1.606      0.108      -0.059       0.593
+rel:C(condition)[T.2]         0.1118      0.223      0.502      0.616      -0.325       0.549
+rel:C(condition)[T.3]         0.0496      0.207      0.240      0.810      -0.355       0.455
+rel:C(condition)[T.4]         0.1230      0.238      0.517      0.605      -0.343       0.589
+ph2                          -0.2609      0.245     -1.064      0.287      -0.741       0.220
+ph2:C(condition)[T.2]        -0.2326      0.305     -0.762      0.446      -0.831       0.365
+ph2:C(condition)[T.3]         0.2386      0.301      0.794      0.427      -0.351       0.828
+ph2:C(condition)[T.4]         0.2609      0.301      0.866      0.386      -0.329       0.851
+rel:ph2                      -0.1340      0.324     -0.413      0.679      -0.769       0.501
+rel:ph2:C(condition)[T.2]     0.3671      0.402      0.913      0.361      -0.421       1.156
+rel:ph2:C(condition)[T.3]    -0.0513      0.370     -0.139      0.890      -0.776       0.674
+rel:ph2:C(condition)[T.4]     0.0084      0.384      0.022      0.983      -0.745       0.761
+==============================================================================
+Skew:                          0.6261   Kurtosis:                      -1.5527
+Centered skew:                 0.5668   Centered kurtosis:             -0.6112
+==============================================================================
+
+Joint Wald test, triple interaction reliable x phase x condition (df=3): chi2 = 2.151, p = 0.5417
+
+Interpretation: 'rel:ph2' = change in the reliable-unreliable gap ({unit}) between phases in the reference condition; 'rel:ph2:C(condition)[T.k]' = how much that change differs in condition k compared with the reference.
