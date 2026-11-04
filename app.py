@@ -98,7 +98,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-11-04.1"
+APP_VERSION = "2026-11-04.2"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -115,7 +115,7 @@ LOCAL_BACKUP_DIR = os.path.join(DATA_DIR, "responses")
 # symbols may also be written as "_" or "-". If a logo is missing, the app
 # lists the file names it expects.
 LOGO_DIR = os.path.join(DATA_DIR, "logos")
-LOGO_EXTENSIONS = (".png", ".svg", ".webp", ".jpg", ".jpeg")
+LOGO_EXTENSIONS = (".png", ".svg", ".webp", ".jpg", ".jpeg", ".gif", ".avif")
 # Optional: outlet -> file name inside LOGO_DIR, when a file can't be named
 # after the outlet. Example: {"www.nytimes.com": "nyt.png"}
 LOGO_FILES = {}
@@ -129,6 +129,15 @@ LOGO_RADIUS_PX = 18
 # Logo height in the outlet survey (both steps) and in the intro, in pixels.
 SURVEY_LOGO_HEIGHT_PX = 96
 INTRO_LOGO_HEIGHT_PX = 64
+# Intro ("How it works"): how many example logos to show. They are drawn at
+# random, for each participant, among ALL the logo images in LOGO_DIR (the
+# feed outlets, the survey outlets and any extra logo you put there), so the
+# intro doesn't reveal which outlets the feeds contain.
+INTRO_LOGO_COUNT = 4
+# Names for extra logos that are in LOGO_DIR but in neither the feeds nor
+# SURVEY_OUTLETS (shown under them in the intro). Without a name the domain
+# is shown. Example: {"nytimes.com": "The New York Times"}
+EXTRA_OUTLET_NAMES = {}
 
 # ---- outlet survey (before the feeds) ----------------------------------------
 # The outlets shown in the survey: domain (also the logo file name, as for
@@ -140,7 +149,7 @@ SURVEY_OUTLETS = [
     {"domain": "bbc.com",         "name": "BBC",          "group": "feed",         "ng_rating": "T", "ng_score": 95.0},
     {"domain": "cnn.com",         "name": "CNN",          "group": "feed",         "ng_rating": "T", "ng_score": 80.0},
     {"domain": "theblaze.com",    "name": "TheBlaze",     "group": "feed",         "ng_rating": "N", "ng_score": 49.5},
-    {"domain": "rt.com",          "name": "RT",           "group": "feed",         "ng_rating": "N", "ng_score": 20.0},
+    {"domain": "rt.com",          "name": "RussiaToday",  "group": "feed",         "ng_rating": "N", "ng_score": 20.0},
     {"domain": "reuters.com",     "name": "Reuters",      "group": "famous",       "ng_rating": "T", "ng_score": 100.0},
     {"domain": "theguardian.com", "name": "The Guardian", "group": "famous",       "ng_rating": "T", "ng_score": 100.0},
     {"domain": "infowars.com",    "name": "Infowars",     "group": "famous",       "ng_rating": "N", "ng_score": 7.5},
@@ -261,7 +270,7 @@ ASSIGNMENT_HEADERS = ["session_id", "prolific_pid", "condition", "assigned_at_ut
 SESSION_HEADERS = [
     "session_id", "prolific_pid", "study_id", "prolific_session_id",
     "condition", "condition_label", "assignment_method",
-    "logo_files", "phase1_order", "phase2_order", "article_split",
+    "logo_files", "intro_logos", "phase1_order", "phase2_order", "article_split",
     "familiarity_order", "preference_order", "n_outlets_known",
     "familiarity_duration_ms", "preference_duration_ms",
     "opened_at_utc", "started_at_utc", "completed_at_utc",
@@ -525,16 +534,22 @@ def compute_split_options(articles, cells, topics, outlets, phase1_n):
 # ---- outlet logos -----------------------------------------------------------
 
 _LOGO_MIME = {".png": "image/png", ".svg": "image/svg+xml", ".webp": "image/webp",
-              ".jpg": "image/jpeg", ".jpeg": "image/jpeg"}
+              ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+              ".avif": "image/avif"}
 
 
 def _logo_key(name):
     """Normalised name used to match a logo file to an outlet: lower case,
-    no leading "www.", and every run of symbols turned into "_"."""
+    no leading "www." (also "www_", "www-" or a typo like "wwww."), and every run of
+    symbols turned into "_"."""
     name = str(name).strip().lower()
-    if name.startswith("www."):
-        name = name[4:]
+    name = re.sub(r"^(https?://)?w{3,}[._\-\s]+", "", name)   # also "wwww." typos
     return re.sub(r"[^a-z0-9.]+", "_", name).strip("_")
+
+
+def _logo_tokens(key):
+    """The words of a normalised name: "infowars.com_logo" -> {infowars, com, logo}."""
+    return {t for t in re.split(r"[._]+", key) if t}
 
 
 def _logo_index():
@@ -560,10 +575,23 @@ def load_logos(outlets, index):
     replacing a logo reloads it."""
     files = {}
     for f, _, _ in index:
-        stem, ext = os.path.splitext(f)
+        stem, ext = os.path.splitext(f.strip())
         if ext.lower() in LOGO_EXTENSIONS:
             files.setdefault(_logo_key(stem), f)
     names = {f for f, _, _ in index}
+
+    def loose_match(key):
+        """Fallback for names like "www.infowars.com_logo.png" or
+        "Infowars-logo.png": the one image whose name contains the outlet's
+        name ("infowars") as a whole word. None if zero or several match."""
+        base = key.split(".")[0]
+        hits = [f for k, f in files.items() if base and base in _logo_tokens(k)]
+        if len(hits) > 1:
+            exact = [f for k, f in files.items() if k.startswith(key)]
+            hits = exact if len(exact) == 1 else hits
+        if len(hits) > 1:
+            log(f"WARNING: several logo files could be '{key}': {hits}; use LOGO_FILES.")
+        return hits[0] if len(hits) == 1 else None
 
     logos, missing = {}, []
     for o in outlets:
@@ -574,7 +602,7 @@ def load_logos(outlets, index):
         if not f:
             # "nytimes.com" matches nytimes.com.png and also nytimes.png
             key = _logo_key(o)
-            f = files.get(key) or files.get(key.rsplit(".", 1)[0])
+            f = files.get(key) or files.get(key.rsplit(".", 1)[0]) or loose_match(key)
         if not f:
             missing.append(o)
             continue
@@ -583,10 +611,31 @@ def load_logos(outlets, index):
             raw = fh.read()
         if len(raw) > LOGO_MAX_KB * 1024:
             log(f"WARNING: logo {f} is {len(raw) // 1024} KB; a smaller file loads faster.")
-        mime = _LOGO_MIME[os.path.splitext(f)[1].lower()]
+        mime = _LOGO_MIME[os.path.splitext(f.strip())[1].lower()]
         logos[o] = {"file": f,
                     "src": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"}
     return logos, missing
+
+
+@st.cache_data(show_spinner=False)
+def load_logo_pool(index):
+    """Every logo image in LOGO_DIR, one per outlet (duplicates of the same
+    outlet, e.g. a .png and a .svg, count once): [{"key", "file", "src"}]."""
+    pool, seen = [], set()
+    for f, _, _ in index:
+        stem, ext = os.path.splitext(f.strip())
+        if ext.lower() not in LOGO_EXTENSIONS:
+            continue
+        key = _logo_key(stem)
+        if key in seen:
+            continue
+        seen.add(key)
+        with open(os.path.join(LOGO_DIR, f), "rb") as fh:
+            raw = fh.read()
+        mime = _LOGO_MIME[ext.lower()]
+        pool.append({"key": key, "file": f,
+                     "src": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"})
+    return pool
 
 
 def logo_hint(outlet):
@@ -925,12 +974,16 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
   .feed { display: flex; flex-direction: column; gap: 14px; }
   .card { position: relative; background: var(--surface); border: 1px solid var(--line);
           border-radius: 12px; padding: 22px 26px 18px; }
-  /* Source visible: the outlet logo sits at the top of the card. */
-  .source { display: flex; align-items: center; height: var(--logo-h, 80px);
+  /* Source visible: the outlet logo and name sit at the top of the card.
+     The name goes beside the logo, or below it when the logo is too wide. */
+  .source { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
             margin: -4px 0 18px; padding: 0; }
-  .source img { display: block; height: 100%; width: auto; max-width: 480px;
+  .source img { display: block; flex: none; height: var(--logo-h, 80px); width: auto;
+                max-width: min(100%, 480px);
                 object-fit: contain; object-position: left center;
                 border-radius: var(--logo-r, 16px); overflow: hidden; }
+  .source-name { font-family: var(--sans); font-weight: 600; font-size: 18px; line-height: 1.25;
+                 color: var(--ink); }
 
   .headline { font-family: var(--sans); font-weight: 600; font-size: 21px; line-height: 1.28;
               letter-spacing: -0.012em; margin: 0 0 10px; color: var(--ink); text-wrap: pretty; }
@@ -976,8 +1029,9 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
 
   @media (max-width: 560px) {
     .card { padding: 18px 18px 16px; }
-    .source { height: calc(var(--logo-h, 80px) * 0.8); }
-    .source img { max-width: 100%; border-radius: calc(var(--logo-r, 16px) * 0.8); }
+    .source img { height: calc(var(--logo-h, 80px) * 0.8); max-width: 100%;
+                  border-radius: calc(var(--logo-r, 16px) * 0.8); }
+    .source-name { font-size: 17px; }
     .headline { font-size: 19px; }
     .body { font-size: 16.5px; }
     .actions { align-items: stretch; }
@@ -1043,7 +1097,7 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
         for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
         url = URL.createObjectURL(new Blob([bytes], { type: mime }));
       } catch (err) { url = src; }
-      out[key] = { url: url, alt: map[key].alt || "" };
+      out[key] = { url: url, alt: map[key].alt || "", name: map[key].name || "" };
     }
     return out;
   }
@@ -1245,10 +1299,11 @@ FEED_COMPONENT_HTML = r"""<!doctype html>
       var src = el("div", "source");
       var img = el("img");
       img.src = logo.url;
-      img.alt = logo.alt;
+      img.alt = logo.name ? "" : logo.alt;   // the name next to it already says it
       img.decoding = "async";
       img.draggable = false;
       src.appendChild(img);
+      if (logo.name) src.appendChild(el("span", "source-name", logo.name));
       card.appendChild(src);
     }
     if (a.title) card.appendChild(el("h2", "headline", a.title));
@@ -1932,8 +1987,11 @@ li.nps-row::marker { content: none; }
 li.nps-row.nps-row-logos { grid-template-columns: 1fr; gap: 14px; }
 .tok-logos { display: flex !important; flex-wrap: wrap; gap: 12px 14px;
              justify-content: flex-start; align-items: center; }
+.tok-logos figure.tok-logo { margin: 0; display: flex; flex-direction: column;
+                             align-items: flex-start; gap: 6px; max-width: 100%; }
 .tok-logos img { display: block; height: var(--intro-logo-h, 64px); width: auto; max-width: 100%;
                  object-fit: contain; border-radius: 12px; }
+.tok-logos figcaption { font-size: 14px; font-weight: 600; line-height: 1.25; color: var(--ink); }
 .tok-more {
   font-weight: 600; font-size: 15px; color: var(--ink); text-decoration: underline;
   text-decoration-thickness: 1.5px; text-decoration-color: var(--line-strong);
@@ -2080,6 +2138,7 @@ def init_session():
         "condition": None,
         "assignment_method": None,
         "logo_files": {},
+        "intro_logos": None,
         "survey_items": [],
         "familiarity_result": None,
         "preference_result": None,
@@ -2096,6 +2155,20 @@ def init_session():
         "save_status": None,
         "saved_parts": [],
     })
+
+
+def outlet_display_name(outlet):
+    """Name shown next to the logo in the feeds: the name given in
+    SURVEY_OUTLETS for that domain (e.g. rt.com -> "RussiaToday"), or the
+    domain itself when the outlet is not listed there."""
+    key = _logo_key(outlet)
+    for o in SURVEY_OUTLETS:
+        if _logo_key(o["domain"]) == key:
+            return o.get("name") or outlet
+    for domain, name in EXTRA_OUTLET_NAMES.items():
+        if _logo_key(domain) == key:
+            return name
+    return outlet
 
 
 def preference_options():
@@ -2270,6 +2343,7 @@ def build_session_row():
         "condition_label": CONDITIONS[ss.condition]["label"],
         "assignment_method": ss.assignment_method,
         "logo_files": json.dumps(ss.logo_files),
+        "intro_logos": json.dumps(ss.intro_logos or []),
         "phase1_order": json.dumps(ss.article_order.get("1", [])),
         "phase2_order": json.dumps(ss.article_order.get("2", [])),
         "article_split": json.dumps(ss.split),
@@ -2428,9 +2502,16 @@ def render_access_blocked(reason):
 
 
 def render_intro(data):
+    ss = st.session_state
     n_feeds = 2
+    # Example logos: drawn once per participant from every logo in LOGO_DIR.
+    pool = {p["file"]: p for p in load_logo_pool(_logo_index())}
+    if ss.intro_logos is None or any(f not in pool for f in ss.intro_logos):
+        ss.intro_logos = _rng.sample(sorted(pool), min(INTRO_LOGO_COUNT, len(pool)))
     logos = "".join(
-        f'<img src="{data["logos"][o]["src"]}" alt="">' for o in data["outlets"]
+        f'<figure class="tok-logo"><img src="{pool[f]["src"]}" alt="">'
+        f'<figcaption>{html_lib.escape(outlet_display_name(pool[f]["key"]))}</figcaption></figure>'
+        for f in ss.intro_logos
     )
     if MIN_FEED_SECONDS > 0:
         wait_note = (" It becomes active once you've spent a little time on the feed, "
@@ -2452,7 +2533,7 @@ def render_intro(data):
     </li>
     <li class="nps-row nps-row-logos">
       <div class="nps-token tok-logos">{logos}</div>
-      <p>The logo at the top of each article shows which news outlet published it.</p>
+      <p>The logo and name at the top of each article show which news outlet published it.</p>
     </li>
     <li class="nps-row">
       <div class="nps-token"><span class="tok-like"><span class="tok-thumb" aria-hidden="true"></span><span>Like</span></span></div>
@@ -2535,7 +2616,8 @@ def render_feed(data):
     rewritten = page["text_version"] == "rewritten"
     # Neutral keys (L1, L2, ...) instead of outlet names in the card data.
     logo_keys = {o: f"L{i + 1}" for i, o in enumerate(data["outlets"])}
-    logos = ({logo_keys[o]: {"src": data["logos"][o]["src"], "alt": o} for o in data["outlets"]}
+    logos = ({logo_keys[o]: {"src": data["logos"][o]["src"], "alt": o,
+                             "name": outlet_display_name(o)} for o in data["outlets"]}
              if page["source_visible"] else {})
     progress_label = f"Feed {page['phase']} of {len(ss.pages)}"
     cards = []
@@ -2708,10 +2790,13 @@ def main():
                                             if o["domain"] not in data["outlets"]]
     logos, missing = load_logos(tuple(logo_outlets), _logo_index())
     if missing:
+        present = [f for f, _, _ in _logo_index()]
         render_setup_error(
             [f"No logo for outlet '{o}': add the file data/logos/{logo_hint(o)} "
-             f"(.svg, .webp or .jpg also work)." for o in missing]
-            + [f"Logo folder: {LOGO_DIR}"])
+             f"(www.{logo_hint(o)} and .svg, .webp, .jpg, .gif, .avif also work)."
+             for o in missing]
+            + [f"Logo folder: {LOGO_DIR}",
+               "Files found in it: " + (", ".join(present) if present else "none")])
         return
     data = dict(data, logos=logos)
 
