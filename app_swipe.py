@@ -8,7 +8,7 @@ Streamlit app for the news-feed experiment: an outlet survey, then two feeds.
                          name, in random order) and says for each one whether
                          they know it.
     Outlets, step 2:     for each outlet they know, a Likert scale: how much
-                         they would like to come across it in their news feed.
+                         they like or dislike it, based on their experience.
                          Skipped when they know none of them.
     Phase 1 (feed 1):    every participant sees the outlet logo and the
                          original text.
@@ -104,7 +104,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-APP_VERSION = "2026-11-04.2"
+APP_VERSION = "2026-11-06.1"
 
 # =============================================================================
 # 1. CONFIGURATION
@@ -172,13 +172,13 @@ FAMILIARITY_LEAD = ("For each outlet, tell us whether you know it. It's complete
                     "not to know some of them: just answer honestly.")
 FAMILIARITY_OPTIONS = [("yes", "I know it"), ("no", "I don't know it")]
 
-PREFERENCE_TITLE = "Would you like to see them in your feed?"
-PREFERENCE_LEAD = ("For each outlet you know, tell us how much you would like to come "
-                   "across its articles in your news feed.")
+PREFERENCE_TITLE = "What do you think of these news outlets?"
+PREFERENCE_LEAD = ("Based on your experience with each of the following news outlets, "
+                   "how much do you like or dislike it?")
 # Likert scale: one value per point, with labels at the two ends and in the
 # middle (an odd number of points puts the middle label on the centre point).
 PREFERENCE_POINTS = 7
-PREFERENCE_ANCHORS = ("Definitely not", "Neutral", "Definitely yes")
+PREFERENCE_ANCHORS = ("Dislike a lot", "Neither like nor dislike", "Like a lot")
 
 # CSV column names. For each field the app uses the first name it finds.
 # Edit these lists if your CSV uses different names.
